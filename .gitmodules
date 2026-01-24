@@ -1,0 +1,12 @@
+[submodule "external/ncurses"]
+	path = external/ncurses
+	url = https://github.com/mirror/ncurses
+	branch = master
+[submodule "external/libedit"]
+	path = external/libedit
+	url = https://salsa.debian.org/debian/libedit.git
+	branch = master
+[submodule "external/grpc"]
+	path = external/grpc
+	url = https://github.com/grpc/grpc
+	branch = master
