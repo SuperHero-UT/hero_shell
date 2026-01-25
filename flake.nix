@@ -28,10 +28,24 @@
           };
 
           packages.default = pkgs.stdenv.mkDerivation {
-            name = "hello";
+            name = "hero_shell";
             src = ./.;
-            buildInputs = [ ];
-            installPhase = '''';
+            buildInputs = [
+              pkgs.cmake
+              pkgs.ninja
+              pkgs.automake
+              pkgs.autoconf
+            ];
+            preConfigure = ''
+              unset NIX_LDFLAGS
+            '';
+            preBuild = ''
+              unset NIX_LDFLAGS
+            '';
+            cmakeFlags = [
+              "-DCMAKE_BUILD_TYPE=Release"
+              "-DCMAKE_IGNORE_PREFIX_PATH=/nix/store"
+            ];
           };
         };
     };
