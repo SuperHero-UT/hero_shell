@@ -86,6 +86,20 @@ jobs:
             echo "Release tag is required (workflow_dispatch must supply release_tag input)." >&2
             exit 1
           fi
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          submodules: recursive
+      - name: Create source tarball
+        env:
+          SOURCE_ARCHIVE: hero_shell-source.tar.gz
+        run: |
+          rm -rf .git
+          find . -name '.git' -type d -prune -exec rm -rf {} +
+          find . -name '.github' -type d -prune -exec rm -rf {} +
+          mkdir -p dist
+          tar -czf "dist/${SOURCE_ARCHIVE}" .
       - uses: actions/download-artifact@v4
         with:
           path: dist
