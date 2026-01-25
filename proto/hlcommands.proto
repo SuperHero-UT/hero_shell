@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package superhero;
+
+message AddDetectorRequest {
+  uint32 logical_address = 1;
+  repeated uint32 target_address = 2;
+  repeated uint32 reply_address = 3;
+}
+
+message AddDetectorReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message RemoveDetectorRequest {
+  uint32 logical_address = 1;
+}
+
+message RemoveDetectorReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message AddRouterRequest {
+  uint32 logical_address = 1;
+  repeated uint32 target_address = 2;
+  repeated uint32 reply_address = 3;
+}
+
+message AddRouterReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message RemoveRouterRequest {
+  uint32 logical_address = 1;
+}
+
+message RemoveRouterReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message RemoveDeviceRequest {
+  uint32 logical_address = 1;
+}
+
+message RemoveDeviceReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message GetDetectorListRequest { };
+
+message GetDetectorListReply {
+  repeated uint32 logical_address = 1;
+}
+
+message GetRouterListRequest { };
+
+message GetRouterListReply {
+  repeated uint32 logical_address = 1;
+}
+
+message GetDeviceListRequest { };
+
+message GetDeviceListReply {
+  repeated uint32 logical_address = 1;
+}
+
+message SetVaRegisterRequest {
+  uint32 logical_address = 1;
+  bytes data = 2;
+}
+
+message SetVaRegisterReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message StartDataStreamRequest {};
+
+message StartDataStreamReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message StopDataStreamRequest {
+  bool dont_stop_detectors = 1;
+};
+
+message StopDataStreamReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+enum SpwLinkSpeed {
+   SpwLinkSpeed_10MHz = 0;
+   SpwLinkSpeed_20MHz = 1;
+   SpwLinkSpeed_25MHz = 2;
+   SpwLinkSpeed_33MHz = 3;
+   SpwLinkSpeed_50MHz = 4;
+  SpwLinkSpeed_100MHz = 5;
+};
+
+message SetLinkSpeedRequest {
+  SpwLinkSpeed speed = 2;
+}
+
+message SetLinkSpeedReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+// Get Status
+message GetDEStatusRequest {};
+
+enum DEStatusType {
+  DEStatusType_IDLE = 0;
+  DEStatusType_NOTCONECTTED = 1;
+  DEStatusType_OBSERVATION = 2;
+};
+
+message GetDEStatusReply {
+  DEStatusType status = 1;
+}
+
+message ConfigureFPGARequest {
+  uint32 logical_address = 1;
+  uint32 peaking_time_nside = 2;
+  uint32 peaking_time_pside = 3;
+  uint32 adc_clock_period = 4;
+  uint32 readout_clock_period = 5;
+  uint32 readout_clock_delay = 6;
+  uint32 trip_patlatch_timing = 7;
+  uint32 reset_wait_time = 8;
+  uint32 reset_wait_time2 = 9;
+}
+
+message ConfigureFPGAReply {
+  bool accepted = 1;
+  string message = 2;
+}
