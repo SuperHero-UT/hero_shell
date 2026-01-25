@@ -58,7 +58,7 @@ jobs:
             ln -sf "$(command -v cmake3)" /usr/local/bin/cmake
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
