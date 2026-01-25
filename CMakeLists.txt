@@ -1,9 +1,20 @@
 cmake_minimum_required(VERSION 3.15)
-project(hero_shell LANGUAGES CXX)
+project(hero_shell VERSION 0.1.0 LANGUAGES CXX)
 
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(ExternalProject)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-attributes>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-return-type>
+    $<$<COMPILE_LANGUAGE:C>:-Wno-array-bounds>
+    $<$<COMPILE_LANGUAGE:C>:-Wno-unused-result>
+  )
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-stringop-overflow>)
+endif()
 
 cmake_host_system_information(
   RESULT _nproc
@@ -72,7 +83,8 @@ ExternalProject_Add(
   BINARY_DIR "${_nc_build}"
   INSTALL_DIR "${_nc_prefix}"
   UPDATE_COMMAND ""
-  CONFIGURE_COMMAND "${_nc_src}/configure" --prefix=${_nc_prefix}
+  CONFIGURE_COMMAND
+    "${_nc_src}/configure" --prefix=${_nc_prefix} --without-cxx --without-cxx-binding
   BUILD_COMMAND make -j8
   INSTALL_COMMAND
     make install
@@ -111,9 +123,10 @@ ExternalProject_Add(
   UPDATE_COMMAND ""
   CONFIGURE_COMMAND
     "${CMAKE_COMMAND}" -E env
-      "CPPFLAGS=-I${_nc_incdir}"
+      "CPPFLAGS=-I${_nc_incdir} -I${_nc_incdir}/ncurses"
       "LDFLAGS=-L${_nc_libdir}"
       "LIBS=-lncurses"
+      "CFLAGS=${CMAKE_C_FLAGS} -Wno-unused-result"
     "${_rl_src}/configure" --prefix=${_rl_prefix} --enable-shared=no --enable-static=yes
   BUILD_COMMAND make -j8
   INSTALL_COMMAND
@@ -148,17 +161,13 @@ if(APPLE)
   find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
   target_link_libraries(hero_shell PUBLIC "${COREFOUNDATION_FRAMEWORK}")
 endif()
+if(UNIX AND NOT APPLE)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_options(hero_shell PRIVATE -static-libgcc -static-libstdc++)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_link_options(hero_shell PRIVATE -static-libstdc++)
+  endif()
+  target_link_options(hero_shell PRIVATE -static)
+endif()
 
 install(TARGETS hero_shell RUNTIME DESTINATION bin)
-
-# unset(_nc_src)
-# unset(_nc_build)
-# unset(_nc_prefix)
-# unset(_nc_incdir)
-# unset(_nc_libdir)
-#
-# unset(_rl_src)
-# unset(_rl_build)
-# unset(_rl_prefix)
-# unset(_rl_incdir)
-# unset(_rl_libdir)
