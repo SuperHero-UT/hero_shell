@@ -2,3 +2,7 @@
 
 .direnv/
 build/
+
+.DS_Store
+.hero_shell_history
+result

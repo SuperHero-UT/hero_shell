@@ -27,21 +27,15 @@ jobs:
           - name: macos-x86_64
             runner: macos-13
             artifact: hero_shell-macos-x86_64.tar.gz
-            container: ''
           - name: macos-arm64
             runner: macos-14
             artifact: hero_shell-macos-arm64.tar.gz
-            container: ''
           - name: manylinux-x86_64
             runner: ubuntu-latest
             artifact: hero_shell-manylinux-x86_64.tar.gz
-            container: quay.io/pypa/manylinux2014_x86_64
           - name: manylinux-aarch64
             runner: ubuntu-latest
             artifact: hero_shell-manylinux-aarch64.tar.gz
-            container: quay.io/pypa/manylinux2014_aarch64
-
-    container: ${{ matrix.container != '' && matrix.container || null }}
 
     steps:
       - name: Install dependencies (macOS)
@@ -50,13 +44,11 @@ jobs:
           brew update
           brew install ninja autoconf automake libtool || true
 
-      - name: Install dependencies (manylinux)
-        if: matrix.container != ''
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.runner, 'ubuntu')
         run: |
-          yum -y install git cmake3 ninja-build make autoconf automake libtool
-          if ! command -v cmake >/dev/null && command -v cmake3 >/dev/null; then
-            ln -sf "$(command -v cmake3)" /usr/local/bin/cmake
-          fi
+          sudo apt-get update
+          sudo apt-get install -y git cmake ninja-build make autoconf automake libtool build-essential
 
       - uses: actions/checkout@v6
         with:
