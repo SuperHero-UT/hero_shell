@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package superhero;
+
+import "hlcommands.proto";
+import "rmap.proto";
+
+service CommunicationService {
+  // Low level
+  rpc RmapWriteSubmit(RmapWriteSubmitRequest) returns (RmapSubmitReply);
+  rpc RmapReadSubmit(RmapReadSubmitRequest)   returns (RmapSubmitReply);
+  rpc RmapResult(RmapResultRequest)           returns (RmapResultReply);
+
+  // High Level
+  rpc AddDetector(AddDetectorRequest)         returns (AddDetectorReply);
+  rpc RemoveDetector(RemoveDetectorRequest)   returns (RemoveDetectorReply);
+  rpc AddRouter(AddRouterRequest)             returns (AddRouterReply);
+  rpc RemoveRouter(RemoveRouterRequest)       returns (RemoveRouterReply);
+  rpc RemoveDevice(RemoveDeviceRequest)       returns (RemoveDeviceReply);
+  rpc GetDetectorList(GetDetectorListRequest) returns (GetDetectorListReply);
+  rpc GetRouterList(GetRouterListRequest)     returns (GetRouterListReply);
+  rpc GetDeviceList(GetDeviceListRequest)     returns (GetDeviceListReply);
+
+  rpc SetVaRegister(SetVaRegisterRequest)     returns (SetVaRegisterReply);
+  rpc StartDataStream(StartDataStreamRequest) returns (StartDataStreamReply);
+  rpc StopDataStream(StopDataStreamRequest)   returns (StopDataStreamReply);
+
+  rpc SetLinkSpeed(SetLinkSpeedRequest)       returns (SetLinkSpeedReply);
+  rpc GetDEStatus(GetDEStatusRequest)         returns (GetDEStatusReply);
+  rpc ConfigureFPGA(ConfigureFPGARequest)     returns (ConfigureFPGAReply);
+
+  // Data Stream
+  rpc DataStream(DataStreamRequest) returns (stream DataStreamReply);
+
+  // Echo request
+  rpc Echo(EchoRequest) returns (EchoReply);
+}
+
+enum DataStreamType {
+  DataStreamType_FrameData = 0;
+  DataStreamType_HKData = 1;
+};
+
+message DataStreamRequest {
+};
+
+message DataStreamReply {
+  uint32 logical_address = 1;
+  bytes value = 2 [ctype = CORD];
+  DataStreamType type = 3;
+}
+
+message EchoRequest {
+  string message = 1;
+}
+
+message EchoReply {
+  string message = 1;
+}

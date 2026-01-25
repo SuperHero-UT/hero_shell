@@ -1,0 +1,38 @@
+CompileFlags:
+  Add:
+    - -Wall
+    - -Werror
+    - -Wextra
+    - -Wpedantic
+    - -nostdinc++
+    - -isystem/nix/store/s7ik6dazn4nd2jdg9l36qf5q0z18sjyk-python3-3.13.8/include
+    - -isystem/nix/store/vv9gzkdwflq9gjyq45n8rs84rf32mxag-readline-8.3p1-dev/include
+    - -isystem/nix/store/avdnhll1w3285laphz7ba0kn7n55vbl8-ncurses-6.5-dev/include
+    - -isystem/nix/store/dglw92zg0pn829d9svzn5n9pdzi75vmh-protobuf-32.1/include
+    - -isystem/nix/store/h8apjx838j51dg38s7m09qpx95rrlwbq-abseil-cpp-20250814.1/include
+    - -isystem/nix/store/95ydj0fp4b3qrld42nm7crn01s36c9n5-grpc-1.75.1/include
+    - -isystem/nix/store/hl9wbbzmmvw8s8z1g69wm47s4kfj1gsy-c-ares-1.34.5-dev/include
+    - -isystem/nix/store/xrmnsjfbyav9r9x7b9laf5s7j9aqgyc4-re2-2025-08-12-dev/include
+    - -isystem/nix/store/jkhc8a2iljvq07vw0zm8hcvy16nw95lc-icu4c-76.1-dev/include
+    - -isystem/nix/store/3wwgwhqvc5anikb7i3vxnggpnsc8n31v-zlib-1.3.1-dev/include
+    - -isystem/nix/store/izw5d5ncyk8rsapyq7z37sglcf624321-openssl-3.6.0-dev/include
+    - -isystem/nix/store/0i8nx9x2nn2cs42z585fx5yxhx7mrhb5-xerces-c-3.3.0/include
+    - -isystem/nix/store/b5j6bvmi749wkwkr70hv75lak17dkm74-gtest-1.17.0-dev/include
+    - -isystem/nix/store/hj5i6y0iin654wgp376gya1avwilv4m8-root-6.36.04/include
+    - -isystem/nix/store/888jraxc8kgn25i5lbq8q1ldvl2w6ibx-nlohmann_json-3.12.0/include
+    - -isystem/nix/store/2awdc1k09bczviql5nc5qylyh8wyq8i7-spw_rmap-1.0.0/include
+    - -isystem/nix/store/al2c8mi746hr9xny97q306v22q3xc2jy-lldb-20.1.8-dev/include
+    - -isystem/nix/store/2xh88byyhrvif26kbmdjvg0jahaxv57d-libcxx-21.1.2-dev/include
+    - -isystem/nix/store/9y52z399adkbydgvmknv39rv60fh255f-compiler-rt-libc-21.1.2-dev/include
+    - -isystem/nix/store/245wgmjlkq2swfkb138xh1jvb41ag8mh-libcxx-19.1.2+apple-sdk-15.5/include
+    - -isystem/nix/store/vrwl6j299frah1v6x3vmfjf1sr8x09la-libiconv-109-dev/include
+    - -isystem/nix/store/7qls54r2f3yslz5hlhhcxpqzbg9fnr0a-libresolv-83-dev/include
+    - -isystem/nix/store/v3y75iccd94qxzs6rng4axri35q2lyzx-libsbuf-14.1.0-dev/include
+    - -isystem/nix/store/2xh88byyhrvif26kbmdjvg0jahaxv57d-libcxx-21.1.2-dev/include/c++/v1
+    - -isystem/nix/store/wbx9ya6aj0q0q474j1ka2zl1zkzjfmli-clang-wrapper-21.1.2/resource-root/include
+    - -isystem/nix/store/ybygcq3s191f07bwgxbqpgqv0ak4h17k-apple-sdk-11.3/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include
+    - -isystem/nix/store/ybygcq3s191f07bwgxbqpgqv0ak4h17k-apple-sdk-11.3/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)
+    - -isystem/nix/store/73sxxnqav6hm0i58canf23fqpl1qmbpk-libSystem-B/include
+
+
+  CompilationDatabase: ./build

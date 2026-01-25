@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package superhero;
+
+enum CdTeDSDAddress {
+  CdTeDSDAddress_VaStatus = 0;
+  CdTeDSDAddress_ModuleStatus = 1;
+  CdTeDSDAddress_VaFlag = 2;
+  CdTeDSDAddress_SetUpModeFlag = 3;
+  CdTeDSDAddress_ObsmodeFlag = 4;
+  CdTeDSDAddress_ForcetrigFlag = 5;
+  CdTeDSDAddress_EnableFlag = 6;
+  CdTeDSDAddress_ExtSignalModeFlag = 7;
+  CdTeDSDAddress_PeakingTime1 = 8;
+  CdTeDSDAddress_AdcClockPeriod = 9;
+  CdTeDSDAddress_ReadOutClockPeriod = 10;
+  CdTeDSDAddress_FastGoLatchTimingAddress = 11;
+  CdTeDSDAddress_HitPatLatchTimingAddress = 12;
+  CdTeDSDAddress_TrigPatLatchTiming = 13;
+  CdTeDSDAddress_ResetWaitTime = 14;
+  CdTeDSDAddress_ResetWaitTime2 = 15;
+  CdTeDSDAddress_TiTime = 16;
+  CdTeDSDAddress_IntegralLiveTime = 17;
+  CdTeDSDAddress_DeadTime = 18;
+  CdTeDSDAddress_RmapTest = 19;
+  CdTeDSDAddress_CaldTrigReq = 20;
+  CdTeDSDAddress_CaldPulseWidth = 21;
+  CdTeDSDAddress_CaldPulseVetoWidth = 22;
+  CdTeDSDAddress_HV = 23;
+  CdTeDSDAddress_HVValue = 24;
+  CdTeDSDAddress_CoinTrigMode = 25;
+  CdTeDSDAddress_PeakingTime2 = 26;
+  CdTeDSDAddress_DRAMWritePointer = 27;
+  CdTeDSDAddress_DRAMWritePointerResetReq = 28;
+  CdTeDSDAddress_AlmostFullSize = 50;
+  CdTeDSDAddress_TIUpper32bit = 29;
+  CdTeDSDAddress_TILower32bit = 30;
+  CdTeDSDAddress_TIUpper32bitNext = 31;
+  CdTeDSDAddress_Timecode = 32;
+  CdTeDSDAddress_Ext1TIUpper32bit = 33;
+  CdTeDSDAddress_Ext1TILower32bit = 34;
+  CdTeDSDAddress_Ext2TIUpper32bit = 35;
+  CdTeDSDAddress_Ext2TILower32bit = 36;
+  CdTeDSDAddress_PseudoONOFF = 37;
+  CdTeDSDAddress_PseudoRate = 38;
+  CdTeDSDAddress_PseudoCounter = 39;
+  CdTeDSDAddress_VaRegPointer = 40;
+  CdTeDSDAddress_VaRegReadBackPointer = 41;
+  CdTeDSDAddress_TimeCodeLookupTable = 47;
+  CdTeDSDAddress_HVDacExec = 48;
+  CdTeDSDAddress_HVDacValue = 49;
+  CdTeDSDAddress_SPMU001GPIO = 42;
+  CdTeDSDAddress_SPMU001SPI = 43;
+  CdTeDSDAddress_SPMU001TEMP = 44;
+  CdTeDSDAddress_SPMU001HUMI = 45;
+  CdTeDSDAddress_SPMU001ACK = 46;
+  CdTeDSDAddress_Port1ConfigAddress = 51;
+  CdTeDSDAddress_Port6ConfigAddress = 52;
+  CdTeDSDAddress_Port7ConfigAddress = 53;
+  CdTeDSDAddress_Port8ConfigAddress = 54;
+  CdTeDSDAddress_Port9ConfigAddress = 55;
+  CdTeDSDAddress_Port10ConfigAddress = 56;
+}
+
+
+message RmapReadSubmitRequest {
+  uint32 logical_address = 1;
+  CdTeDSDAddress address = 2;
+  uint32 length = 3;
+}
+
+message RmapWriteSubmitRequest {
+  uint32 logical_address = 1;
+  CdTeDSDAddress address = 2;
+  bytes value = 3;
+}
+
+enum RmapSubmitStatus {
+  RmapSubmit_Accepted = 0;
+  RmapSubmit_InvalidArgument = 1;
+  RmapSubmit_TaskQueueIsFull = 2;
+  RmapSubmit_Denied = 3;
+}
+
+message RmapSubmitReply {
+  RmapSubmitStatus status = 1;
+  int32 task_id = 2;
+  string message = 3;
+}
+
+message RmapResultRequest {
+  int32 task_id = 2;
+}
+
+enum RmapResultStatus {
+  RmapResult_Ok = 0;
+  RmapResult_Waiting = 1;
+  RmapResult_Error = 2;
+}
+
+message RmapResultReply {
+  RmapResultStatus status = 1;
+  string message = 2;
+  bytes value = 3;
+}
