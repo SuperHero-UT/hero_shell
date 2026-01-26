@@ -133,7 +133,7 @@ message ConfigureFPGARequest {
   uint32 adc_clock_period = 4;
   uint32 readout_clock_period = 5;
   uint32 readout_clock_delay = 6;
-  uint32 trip_patlatch_timing = 7;
+  uint32 trig_patlatch_timing = 7;
   uint32 reset_wait_time = 8;
   uint32 reset_wait_time2 = 9;
 }

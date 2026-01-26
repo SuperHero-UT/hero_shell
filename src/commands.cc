@@ -761,7 +761,7 @@ auto do_configure_fpga(const std::vector<std::string>& tokens) -> bool {
   };
   std::map<std::string, FieldState> fields = {
       {"peaking_time_nside", {}},   {"peaking_time_pside", {}},  {"adc_clock_period", {}},
-      {"readout_clock_period", {}}, {"readout_clock_delay", {}}, {"trip_patlatch_timing", {}},
+      {"readout_clock_period", {}}, {"readout_clock_delay", {}}, {"trig_patlatch_timing", {}},
       {"reset_wait_time", {}},      {"reset_wait_time2", {}}};
 
   try {
@@ -809,7 +809,7 @@ auto do_configure_fpga(const std::vector<std::string>& tokens) -> bool {
   req.set_adc_clock_period(fields.at("adc_clock_period").value);
   req.set_readout_clock_period(fields.at("readout_clock_period").value);
   req.set_readout_clock_delay(fields.at("readout_clock_delay").value);
-  req.set_trip_patlatch_timing(fields.at("trip_patlatch_timing").value);
+  req.set_trig_patlatch_timing(fields.at("trig_patlatch_timing").value);
   req.set_reset_wait_time(fields.at("reset_wait_time").value);
   req.set_reset_wait_time2(fields.at("reset_wait_time2").value);
 
