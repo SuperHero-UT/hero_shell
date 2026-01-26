@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,10 @@ inline auto base64_decode(const std::string& s) -> std::vector<uint8_t> {
   int bits = 0;
 
   for (unsigned char c : s) {
+    if (c == '\n' || c == '\r' || c == '\t' || c == ' ') {
+      continue;
+    }
+
     const int8_t v = kBase64DecTable[c];
     if (v == -1) {
       throw std::invalid_argument("Invalid base64 character");
@@ -50,4 +55,4 @@ inline auto base64_decode(const std::string& s) -> std::vector<uint8_t> {
   return out;
 }
 
-};  // namespace shell::base64
+}  // namespace shell::base64
