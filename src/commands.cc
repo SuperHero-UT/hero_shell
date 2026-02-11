@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -1129,6 +1130,29 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     apply_xattr_to_file(datafilename, build_xattr_map(addr));
   }
   std::cout << "\tOutput data files created with prefix: " << file_prefix << "\n";
+
+  {
+    std::vector<uint8_t> sorted_addresses = *detector_addresses;
+    std::sort(sorted_addresses.begin(), sorted_addresses.end());
+    std::ofstream readout_log("readoutlog.txt", std::ios::app);
+    if (!readout_log.is_open()) {
+      std::cout << "Failed to open readout log: readoutlog.txt\n";
+      return false;
+    }
+    const std::filesystem::path log_base = std::filesystem::path("readoutlog.txt").parent_path();
+    for (const auto& addr : sorted_addresses) {
+      const auto datafilename = file_prefix + "_" + shell::to_hex_string(addr);
+      std::filesystem::path relative_path = datafilename;
+      try {
+        const auto base = log_base.empty() ? std::filesystem::path(".") : log_base;
+        relative_path = std::filesystem::relative(datafilename, base);
+      } catch (const std::exception&) {
+        relative_path = datafilename;
+      }
+      readout_log << relative_path.string() << " " << exposure_seconds_value << " "
+                  << acquired_date_value << "\n";
+    }
+  }
 
   try {
     ::superhero::StartDataStreamRequest req;
