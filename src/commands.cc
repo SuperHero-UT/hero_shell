@@ -80,6 +80,8 @@ auto trim_copy(const std::string& input) -> std::string {
   return {first, last};
 }
 
+std::string g_last_set_vareg_path = "N/A";
+
 auto ensure_grpc_initialized() -> bool {
   if (!g_stub) {
     std::cout
@@ -906,6 +908,7 @@ auto do_set_vareg(const std::vector<std::string>& tokens) -> bool {
     do_help({"help", "set_vareg"});
     return false;
   }
+  g_last_set_vareg_path = tokens[2];
   uint8_t logical_address = 0;
   try {
     logical_address = shell::parse_uint8(tokens[1]);
@@ -1134,14 +1137,32 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
   {
     std::vector<uint8_t> sorted_addresses = *detector_addresses;
     std::sort(sorted_addresses.begin(), sorted_addresses.end());
-    std::ofstream readout_log("readoutlog.txt", std::ios::app);
+    std::ofstream readout_log("log.txt", std::ios::app);
     if (!readout_log.is_open()) {
-      std::cout << "Failed to open readout log: readoutlog.txt\n";
+      std::cout << "Failed to open readout log: log.txt\n";
       return false;
     }
-    const std::filesystem::path log_base = std::filesystem::path("readoutlog.txt").parent_path();
+    const std::filesystem::path log_base = std::filesystem::path("log.txt").parent_path();
     for (const auto& addr : sorted_addresses) {
       const auto datafilename = file_prefix + "_" + shell::to_hex_string(addr);
+      bool force_flag = false;
+      try {
+        auto data = superhero::grpc::rmapRead(
+            *g_stub, addr, ::superhero::CdTeDSDAddress_ForcetrigFlag, 4);
+        if (data.size() != 4) {
+          std::cout << "Unexpected ForcetrigFlag size for " << shell::to_hex_string(addr) << ": "
+                    << data.size() << " bytes\n";
+          return false;
+        }
+        uint32_t value = (static_cast<uint32_t>(data[0]) << 24) |
+                         (static_cast<uint32_t>(data[1]) << 16) |
+                         (static_cast<uint32_t>(data[2]) << 8) | static_cast<uint32_t>(data[3]);
+        force_flag = value != 0;
+      } catch (const std::exception& e) {
+        std::cout << "Failed to read ForcetrigFlag for " << shell::to_hex_string(addr) << ": "
+                  << e.what() << "\n";
+        return false;
+      }
       std::filesystem::path relative_path = datafilename;
       try {
         const auto base = log_base.empty() ? std::filesystem::path(".") : log_base;
@@ -1149,8 +1170,9 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
       } catch (const std::exception&) {
         relative_path = datafilename;
       }
-      readout_log << relative_path.string() << " " << exposure_seconds_value << " "
-                  << acquired_date_value << "\n";
+      readout_log << relative_path.string() << " " << acquired_date_value << " "
+                  << exposure_seconds_value << " " << g_last_set_vareg_path << " "
+                  << (force_flag ? "true" : "false") << "\n";
     }
   }
 
