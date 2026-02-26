@@ -1243,6 +1243,7 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
           }
           auto raw_data = data.Flatten();
           *(datafile_it->second) << raw_data;
+          *(datafile_it->second) << std::flush;
           break;
         }
         case superhero::DataStreamType::DataStreamType_HKData: {
