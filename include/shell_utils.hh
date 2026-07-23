@@ -41,18 +41,20 @@ class defer {
 
  private:
   std::function<void()> func_;
-  bool active_{};
+  bool active_{true};
 };
 
 inline auto split_shell_like(const std::string& input) -> std::vector<std::string> {
   std::vector<std::string> tokens;
   std::string cur;
   bool in_quote = false;
+  bool in_token = false;
 
   for (size_t i = 0; i < input.size(); ++i) {
     char c = input[i];
 
     if (c == '\\') {
+      in_token = true;
       if (i + 1 < input.size()) {
         cur.push_back(input[i + 1]);
         ++i;
@@ -62,21 +64,24 @@ inline auto split_shell_like(const std::string& input) -> std::vector<std::strin
 
     if (c == '"') {
       in_quote = !in_quote;
+      in_token = true;
       continue;
     }
 
     if (!in_quote && std::isspace(static_cast<unsigned char>(c))) {
-      if (!cur.empty()) {
+      if (in_token) {
         tokens.push_back(cur);
         cur.clear();
+        in_token = false;
       }
       continue;
     }
 
+    in_token = true;
     cur.push_back(c);
   }
 
-  if (!cur.empty()) {
+  if (in_token) {
     tokens.push_back(cur);
   }
 
