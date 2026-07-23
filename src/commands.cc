@@ -1052,7 +1052,10 @@ auto do_show(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
 
-  std::array<::superhero::CdTeDSDAddress, 37> show_addresses = {
+  // Size is deduced from the list so it cannot drift from the entry count
+  // (a hardcoded size that was too large left zero-initialized VaStatus
+  // entries duplicated at the end).
+  const ::superhero::CdTeDSDAddress show_addresses[] = {
       ::superhero::CdTeDSDAddress_VaStatus,
       ::superhero::CdTeDSDAddress_ModuleStatus,
       ::superhero::CdTeDSDAddress_VaFlag,
