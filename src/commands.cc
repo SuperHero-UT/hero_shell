@@ -221,7 +221,7 @@ auto do_help(const std::vector<std::string>& tokens) -> bool {
         current_category = &info.category;
         std::cout << "\n" << info.category << ":\n";
       }
-      if (command_available(info)) {
+      if (command_available(info) && shell::stdout_is_tty()) {
         std::cout << "  \033[1m" << std::left << std::setw(20) << info.name << "\033[0m"
                   << info.summary << "\n";
       } else {
@@ -266,7 +266,7 @@ auto do_sleep(const std::vector<std::string>& tokens) -> bool {
       if (now >= deadline) {
         break;
       }
-      if (now >= next_print) {
+      if (now >= next_print && shell::stdout_is_tty()) {
         auto remaining = std::chrono::ceil<std::chrono::seconds>(deadline - now);
         auto hrs = remaining.count() / 3600;
         auto mins = (remaining.count() % 3600) / 60;
@@ -279,7 +279,9 @@ auto do_sleep(const std::vector<std::string>& tokens) -> bool {
       auto chunk = std::min(duration_cast<milliseconds>(deadline - now), 100ms);
       std::this_thread::sleep_for(chunk);
     }
-    std::cout << "\r" << std::string(30, ' ') << "\r";
+    if (shell::stdout_is_tty()) {
+      std::cout << "\r" << std::string(30, ' ') << "\r";
+    }
   } else {
     while (!g_interrupted.load(std::memory_order_relaxed)) {
       auto now = steady_clock::now();
@@ -320,6 +322,7 @@ auto do_connect(const std::vector<std::string>& tokens) -> bool {
   }
   g_current_endpoint = tokens[1];
   refresh_state_after_device_change();
+  std::cout << "Connected to " << tokens[1] << "\n";
   return true;
 }
 
@@ -414,7 +417,7 @@ auto do_remove_detector(const std::vector<std::string>& tokens) -> bool {
   try {
     validate_logical_address(logical_address);
   } catch (const std::exception& e) {
-    std::cout << "Error parsing logical address: " << e.what() << "\n";
+    std::cout << e.what() << "\n";
     return false;
   }
 
@@ -530,7 +533,7 @@ auto do_remove_router(const std::vector<std::string>& tokens) -> bool {
   try {
     validate_logical_address(logical_address);
   } catch (const std::exception& e) {
-    std::cout << "Error parsing logical address: " << e.what() << "\n";
+    std::cout << e.what() << "\n";
     return false;
   }
 
@@ -574,7 +577,7 @@ auto do_remove_device(const std::vector<std::string>& tokens) -> bool {
   try {
     validate_logical_address(logical_address);
   } catch (const std::exception& e) {
-    std::cout << "Error parsing logical address: " << e.what() << "\n";
+    std::cout << e.what() << "\n";
     return false;
   }
 
@@ -776,7 +779,7 @@ auto do_configure_fpga(const std::vector<std::string>& tokens) -> bool {
     logical_address = static_cast<uint8_t>(shell::parse_uint8(tokens[1]));
     validate_logical_address(logical_address);
   } catch (const std::exception& e) {
-    std::cout << "Error parsing logical address: " << e.what() << "\n";
+    std::cout << "Invalid logical address: " << e.what() << "\n";
     return false;
   }
 
@@ -917,6 +920,14 @@ auto do_get(const std::vector<std::string>& tokens) -> bool {
       std::cout << "<no data>\n";
       continue;
     }
+    if (data.size() == 4) {
+      // Same presentation as `show`: one 32-bit big-endian value.
+      uint32_t value = (static_cast<uint32_t>(data[0]) << 24) |
+                       (static_cast<uint32_t>(data[1]) << 16) |
+                       (static_cast<uint32_t>(data[2]) << 8) | static_cast<uint32_t>(data[3]);
+      std::cout << shell::to_hex_string(value) << "  (" << value << ")\n";
+      continue;
+    }
     for (unsigned char i : data) {
       std::cout << shell::to_hex_string(i) << " ";
     }
@@ -945,7 +956,7 @@ auto do_set_vareg(const std::vector<std::string>& tokens) -> bool {
   try {
     validate_logical_address(logical_address);
   } catch (const std::exception& e) {
-    std::cout << "Error parsing logical address: " << e.what() << "\n";
+    std::cout << e.what() << "\n";
     return false;
   }
   std::cout << "Setting VAREG for device " << shell::to_hex_string(logical_address) << " from file "
@@ -1030,7 +1041,7 @@ auto do_show(const std::vector<std::string>& tokens) -> bool {
   try {
     validate_logical_address(logical_address);
   } catch (const std::exception& e) {
-    std::cout << "Error parsing logical address: " << e.what() << "\n";
+    std::cout << e.what() << "\n";
     return false;
   }
 
@@ -1087,13 +1098,15 @@ auto do_show(const std::vector<std::string>& tokens) -> bool {
                     ? value_descriptor->name().substr(std::string("CdTeDSDAddress_").size())
                     : "Unknown";
     if (data.size() != 4) {
-      std::cout << "\t" << name << ":\t<unexpected " << data.size() << " bytes>\n";
+      std::cout << "  " << std::left << std::setw(26) << name << "<unexpected " << data.size()
+                << " bytes>\n";
       continue;
     }
     uint32_t value = (static_cast<uint32_t>(data[0]) << 24) |
                      (static_cast<uint32_t>(data[1]) << 16) |
                      (static_cast<uint32_t>(data[2]) << 8) | static_cast<uint32_t>(data[3]);
-    std::cout << "\t" << name << ":\t0x" << shell::to_hex_string(value) << "\n";
+    std::cout << "  " << std::left << std::setw(26) << name << shell::to_hex_string(value)
+              << "  (" << value << ")\n";
   }
 
   return true;
@@ -1333,28 +1346,30 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
   auto start_time = std::chrono::steady_clock::now();
   while (std::chrono::steady_clock::now() - start_time < duration) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
-    std::map<uint8_t, size_t> counters_snapshot;
-    {
-      std::lock_guard<std::mutex> lock(frame_counter_mutex);
-      counters_snapshot = frame_counters;
-    }
-    size_t total_frames = 0;
-    for (const auto& [addr, count] : counters_snapshot) {
-      total_frames += count;
-    }
-    std::cout << "\r\tFrames: " << total_frames << " | ";
-    for (const auto& [addr, count] : counters_snapshot) {
-      std::cout << "Addr " << shell::to_hex_string(addr) << ": " << count << "  ";
-    }
+    if (shell::stdout_is_tty()) {
+      std::map<uint8_t, size_t> counters_snapshot;
+      {
+        std::lock_guard<std::mutex> lock(frame_counter_mutex);
+        counters_snapshot = frame_counters;
+      }
+      size_t total_frames = 0;
+      for (const auto& [addr, count] : counters_snapshot) {
+        total_frames += count;
+      }
+      std::cout << "\r\tFrames: " << total_frames << " | ";
+      for (const auto& [addr, count] : counters_snapshot) {
+        std::cout << "Addr " << shell::to_hex_string(addr) << ": " << count << "  ";
+      }
 
-    auto elapsed = std::chrono::steady_clock::now() - start_time;
-    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-    auto hours = seconds / 3600;
-    auto minutes = (seconds % 3600) / 60;
-    seconds = seconds % 60;
-    std::cout << "| Elapsed Time: " << std::setfill('0') << std::setw(2) << hours << ":"
-              << std::setfill('0') << std::setw(2) << minutes << ":" << std::setfill('0')
-              << std::setw(2) << seconds << "  " << std::flush;
+      auto elapsed = std::chrono::steady_clock::now() - start_time;
+      auto seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+      auto hours = seconds / 3600;
+      auto minutes = (seconds % 3600) / 60;
+      seconds = seconds % 60;
+      std::cout << "| Elapsed Time: " << std::setfill('0') << std::setw(2) << hours << ":"
+                << std::setfill('0') << std::setw(2) << minutes << ":" << std::setfill('0')
+                << std::setw(2) << seconds << "  " << std::flush;
+    }
     if (g_interrupted.load(std::memory_order_relaxed)) {
       std::cout << "\nReadout interrupted by SIGINT\n";
       break;
@@ -1364,7 +1379,12 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
       break;
     }
   }
-  std::cout << "\n";
+  if (shell::stdout_is_tty()) {
+    std::cout << "\n";
+  }
+  // Acquisition time only — measured before the stop/cancel sequence.
+  const auto acquisition_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::steady_clock::now() - start_time);
 
   bool stop_ok = true;
   {
@@ -1396,6 +1416,22 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
   }
   stream_context.TryCancel();
   readout_thread.join();
+
+  // Final summary: the durable record of the acquisition for batch logs.
+  {
+    size_t total_frames = 0;
+    for (const auto& [addr, count] : frame_counters) {
+      total_frames += count;
+    }
+    std::cout << "Readout summary: " << total_frames << " frames in "
+              << acquisition_elapsed.count() << "s\n";
+    for (const auto& [addr, count] : frame_counters) {
+      std::cout << "  " << shell::to_hex_string(addr) << ": " << count << " frames -> "
+                << file_prefix << "_" << shell::to_hex_string(addr) << "\n";
+    }
+    std::cout << "  HK -> " << hk_filename << "\n";
+  }
+
   if (g_interrupted.load(std::memory_order_relaxed)) {
     g_interrupted.store(false, std::memory_order_relaxed);
     return false;

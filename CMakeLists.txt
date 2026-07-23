@@ -149,6 +149,8 @@ add_dependencies(superhero_readline superhero_ext_readline)
 ################################################################################
 add_executable(hero_shell src/hero_shell.cc src/commands.cc src/completions.cc)
 target_compile_features(hero_shell PRIVATE cxx_std_17)
+target_compile_definitions(hero_shell
+                           PRIVATE HERO_SHELL_VERSION="${PROJECT_VERSION}")
 # target_compile_options(hero_shell PRIVATE -Wall -Wextra -Wpedantic -Werror
 #                                           -Wno-deprecated-declarations
 #                                           -Wno-gcc-compat

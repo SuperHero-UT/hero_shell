@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -12,6 +14,13 @@
 #include <vector>
 
 namespace shell {
+
+// ANSI styling and \r progress lines are for interactive terminals only;
+// batch logs (redirected stdout) must stay clean.
+inline auto stdout_is_tty() -> bool {
+  static const bool is_tty = ::isatty(STDOUT_FILENO) != 0;
+  return is_tty;
+}
 
 class defer {
  public:
