@@ -13,7 +13,7 @@ namespace superhero::grpc {
 
 namespace {
 constexpr auto kRmapResultPollInterval = std::chrono::milliseconds(15);
-constexpr int kRmapResultMaxAttempts = 100;
+constexpr int kRmapResultMaxAttempts = 1000;
 }  // namespace
 
 inline auto echo(superhero::CommunicationService::Stub& stub, const std::string& message)
@@ -88,7 +88,6 @@ inline auto rmapRead(superhero::CommunicationService::Stub& stub, uint16_t logic
         case superhero::RmapResultStatus::RmapResult_Error:
           throw std::runtime_error("RmapResult (Read): Result Error\n" + reply.message());
         case superhero::RmapResultStatus::RmapResult_Waiting:
-          std::cerr << "RmapResult (Read): Waiting\n";
           continue;
         default:
           throw std::runtime_error("RmapResult (Read) returned unknown status: " +
@@ -157,7 +156,6 @@ inline auto rmapWrite(superhero::CommunicationService::Stub& stub, uint16_t logi
         case superhero::RmapResultStatus::RmapResult_Error:
           throw std::runtime_error("RmapResult (Write): Result Error\n" + reply.message());
         case superhero::RmapResultStatus::RmapResult_Waiting:
-          std::cerr << "RmapResult (Write): Waiting\n";
           continue;
         default:
           throw std::runtime_error("RmapResult (Write) returned unknown status: " +

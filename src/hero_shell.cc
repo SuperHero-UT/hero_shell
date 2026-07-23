@@ -136,9 +136,22 @@ auto command_available(const CommandInfo& info) -> bool {
 
 namespace {
 
+constexpr const char* kHistoryFile = ".hero_shell_history";
+// True once run_shell has loaded the history; guards against clobbering the
+// history file with an empty list when `exit` runs in argv-script mode.
+bool g_history_loaded = false;
+
 void handle_sigint(int) {
   g_interrupted.store(true, std::memory_order_relaxed);
-  rl_done = 1;
+}
+
+// Installed without SA_RESTART so a blocked readline read() returns EINTR.
+void install_sigint_handler() {
+  struct sigaction sa{};
+  sa.sa_handler = handle_sigint;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT, &sa, nullptr);
 }
 
 void rstrip(std::string& line) {
@@ -351,7 +364,7 @@ auto load_script(const std::string& filename, int depth) -> bool {
       line += continuation;
     }
     auto token = shell::split_shell_like(line);
-    if (token.empty() || token[0][0] == '#') {
+    if (token.empty() || token[0].empty() || token[0][0] == '#') {
       continue;
     }
     const auto prompt = build_prompt();
@@ -370,7 +383,7 @@ auto execute_command(const std::string& line, int depth) -> bool {
     return false;
   }
   auto tokens = shell::split_shell_like(line);
-  if (tokens.empty()) {
+  if (tokens.empty() || tokens[0].empty()) {
     return true;
   }
   if (tokens[0] == "help") {
@@ -448,6 +461,10 @@ auto execute_command(const std::string& line, int depth) -> bool {
     return load_script(script_file, depth);
   }
   if (tokens[0] == "exit" || tokens[0] == "quit") {
+    // std::exit skips local destructors, so persist history explicitly.
+    if (g_history_loaded) {
+      write_history(kHistoryFile);
+    }
     std::exit(0);
   }
 
@@ -457,16 +474,16 @@ auto execute_command(const std::string& line, int depth) -> bool {
 
 auto run_shell() -> int {
   rl_catch_signals = 0;
-  std::signal(SIGINT, handle_sigint);
 
   rl_attempted_completion_function = repl_completion;
   rl_variable_bind("show-all-if-ambiguous", "on");
 
-  const char* history_file = ".hero_shell_history";
-  shell::defer write_history_on_exit([history_file]() -> void { write_history(history_file); });
+  shell::defer write_history_on_exit([]() -> void { write_history(kHistoryFile); });
 
   using_history();
-  read_history(history_file);
+  read_history(kHistoryFile);
+  stifle_history(1000);
+  g_history_loaded = true;
 
   while (true) {
     g_interrupted.store(false, std::memory_order_relaxed);
@@ -520,17 +537,18 @@ auto run_shell() -> int {
     execute_command(line, 0);
   }
 
-  write_history(history_file);
   return 0;
 }
 
 auto main(int argc, char** argv) -> int {
+  install_sigint_handler();
   if (argc > 1) {
     std::string script_file = argv[1];
     if (!execute_command("@" + script_file, 0)) {
       std::cerr << "Error executing script file: " << script_file << "\n";
       return 1;
     }
+    return 0;
   }
 
   return run_shell();
