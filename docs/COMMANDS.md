@@ -68,15 +68,20 @@ help readout
 ### `sleep`
 
 ```text
-sleep <seconds>
+sleep <duration>
 ```
 
-Pauses for a decimal number of seconds. `Ctrl-C` interrupts it.
+Pauses for the given duration. `Ctrl-C` interrupts it. A bare number is
+interpreted as seconds; duration units (same grammar as `readout`) are also
+accepted.
 
-Example:
+Examples:
 
 ```text
 sleep 2.5
+sleep 500ms
+sleep 5min
+sleep 1h30min
 ```
 
 For delays of at least three seconds, an interactive terminal shows a countdown.

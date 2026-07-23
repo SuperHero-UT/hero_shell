@@ -46,9 +46,10 @@ const std::vector<CommandInfo> kCommands = {
   A line starting with '@' runs a script file: @myscript.txt
   Example: help set)"},
     {"sleep", "General", kAllStates, "Pause the shell for a duration",
-     R"(Usage: sleep <seconds>
-  Pause the shell for the given number of seconds (Ctrl-C interrupts).
-  Example: sleep 5)"},
+     R"(Usage: sleep <duration>
+  Pause the shell for the given duration (Ctrl-C interrupts).
+  A bare number means seconds; units like 5min, 1h30min, 500ms are also accepted.
+  Example: sleep 5min)"},
     {"exit", "General", kAllStates, "Terminate the shell",
      "Usage: exit\n  Terminate the shell. 'quit' is an alias."},
     {"quit", "General", kAllStates, "Terminate the shell",
