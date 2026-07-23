@@ -248,15 +248,22 @@ auto do_sleep(const std::vector<std::string>& tokens) -> bool {
     do_help({"help", "sleep"});
     return false;
   }
-  double seconds = 0.0;
+  // A bare number (no unit) means seconds; otherwise accept duration units
+  // like 5min, 1h30min, 500ms (same grammar as readout).
+  std::string duration_spec = tokens[1];
+  if (!duration_spec.empty() &&
+      std::isalpha(static_cast<unsigned char>(duration_spec.back())) == 0) {
+    duration_spec += "s";
+  }
+
+  std::chrono::nanoseconds sleep_duration{};
   try {
-    seconds = std::stod(tokens[1]);
+    sleep_duration = shell::parse_duration(duration_spec);
   } catch (const std::exception& e) {
     std::cout << "Error parsing duration: " << e.what() << "\n";
     return false;
   }
-
-  auto sleep_duration = duration_cast<milliseconds>(duration<double>(seconds));
+  double seconds = duration<double>(sleep_duration).count();
   auto deadline = steady_clock::now() + sleep_duration;
 
   if (seconds >= 3.0) {
