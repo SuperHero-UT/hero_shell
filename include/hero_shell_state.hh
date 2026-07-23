@@ -26,8 +26,20 @@ extern std::string g_current_endpoint;
 extern int g_router_count;
 extern int g_detector_count;
 extern std::vector<std::string> g_candidate;
-extern const std::vector<std::pair<std::vector<ShellState>, std::string>> kCommandList;
-extern const std::map<std::string, std::string> kHelps;
+
+// Single source of truth for command metadata: availability (states), the
+// categorized `help` listing (category/summary), and `help <command>` (help).
+// Entries are grouped by category; do_help prints a header when it changes.
+struct CommandInfo {
+  std::string name;
+  std::string category;
+  std::vector<ShellState> states;
+  std::string summary;
+  std::string help;
+};
+extern const std::vector<CommandInfo> kCommands;
+auto find_command(const std::string& name) -> const CommandInfo*;
+auto command_available(const CommandInfo& info) -> bool;
 
 struct PromptInfo {
   std::string readline_text;
