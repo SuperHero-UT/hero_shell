@@ -215,24 +215,29 @@ auto parse_link_speed_token(std::string token) -> std::optional<superhero::SpwLi
 auto do_help(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() == 1) {
     std::cout << "Available commands:\n";
-    for (const auto& [states, command] : kCommandList) {
-      if (std::find(states.begin(), states.end(), g_current_state) != states.end()) {
-        std::cout << "  \033[1m" << command << "\033[0m\n";
+    const std::string* current_category = nullptr;
+    for (const auto& info : kCommands) {
+      if (!current_category || *current_category != info.category) {
+        current_category = &info.category;
+        std::cout << "\n" << info.category << ":\n";
+      }
+      if (command_available(info)) {
+        std::cout << "  \033[1m" << std::left << std::setw(20) << info.name << "\033[0m"
+                  << info.summary << "\n";
       } else {
-        std::cout << "  " << command << "\n";
+        std::cout << "  " << std::left << std::setw(20) << info.name << info.summary << "\n";
       }
     }
-    std::cout << "Type 'help <command>' for more information.\n";
+    std::cout << "\nType 'help <command>' for more information.\n";
+    std::cout << "Use '@<file>' to run a script file, and 'exit'/'quit' to leave the shell.\n";
     return true;
   }
   if (tokens.size() == 2) {
-    auto command = tokens[1];
-    auto it = kHelps.find(command);
-    if (it != kHelps.end()) {
-      std::cout << it->second << "\n";
+    if (const auto* info = find_command(tokens[1])) {
+      std::cout << info->help << "\n";
       return true;
     }
-    std::cout << "Unknown command: " << command << "\n";
+    std::cout << "Unknown command: " << tokens[1] << "\n";
     return false;
   }
   return false;
@@ -302,6 +307,9 @@ auto do_connect(const std::vector<std::string>& tokens) -> bool {
     std::this_thread::sleep_for(100ms);
   } catch (const std::exception& e) {
     std::cout << "Connection failed: " << e.what() << "\n";
+    // Do not leave a half-initialized stub behind; commands gate on g_stub.
+    g_stub.reset();
+    g_channel.reset();
     return false;
   }
   g_current_endpoint = tokens[1];
@@ -641,13 +649,13 @@ auto do_list_devices(const std::vector<std::string>& tokens) -> bool {
 
 auto do_list_detectors(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() != 1) {
-    do_help({"help", "list_devices"});
+    do_help({"help", "list_detectors"});
     return false;
   }
   if (!ensure_grpc_initialized()) {
     return false;
   }
-  std::cout << "Connected devices:\n";
+  std::cout << "Connected detectors:\n";
   if (const auto detectors = get_detector_logical_addresses()) {
     for (const auto& addr : *detectors) {
       std::cout << "  Logical Address: " << shell::to_hex_string(addr) << "\n";
@@ -658,13 +666,13 @@ auto do_list_detectors(const std::vector<std::string>& tokens) -> bool {
 
 auto do_list_routers(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() != 1) {
-    do_help({"help", "list_devices"});
+    do_help({"help", "list_routers"});
     return false;
   }
   if (!ensure_grpc_initialized()) {
     return false;
   }
-  std::cout << "Connected devices:\n";
+  std::cout << "Connected routers:\n";
   if (const auto routers = get_router_logical_addresses()) {
     for (const auto& addr : *routers) {
       std::cout << "  Logical Address: " << shell::to_hex_string(addr) << "\n";
@@ -714,7 +722,7 @@ auto do_set(const std::vector<std::string>& tokens) -> bool {
 
   std::vector<uint8_t> value_bytes;
   try {
-    int value = shell::parse_uint32(tokens.back());
+    uint32_t value = shell::parse_uint32(tokens.back());
     value_bytes.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
     value_bytes.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
     value_bytes.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
@@ -724,11 +732,13 @@ auto do_set(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
 
+  bool all_ok = true;
   for (auto logical_address : logical_addresses) {
     try {
       validate_logical_address(logical_address);
     } catch (const std::exception& e) {
       std::cout << e.what() << "\n";
+      all_ok = false;
       continue;
     }
     try {
@@ -736,9 +746,10 @@ auto do_set(const std::vector<std::string>& tokens) -> bool {
     } catch (const std::exception& e) {
       std::cout << "Failed to set parameter for device " << shell::to_hex_string(logical_address)
                 << ": " << e.what() << "\n";
+      all_ok = false;
     }
   }
-  return true;
+  return all_ok;
 }
 
 auto do_configure_fpga(const std::vector<std::string>& tokens) -> bool {
@@ -935,8 +946,14 @@ auto do_set_vareg(const std::vector<std::string>& tokens) -> bool {
     std::cout << "Error opening file " << filename << "\n";
     return false;
   }
-  auto data = shell::base64::base64_decode(
-      std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()));
+  std::vector<uint8_t> data;
+  try {
+    data = shell::base64::base64_decode(
+        std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()));
+  } catch (const std::exception& e) {
+    std::cout << "Error decoding base64 in " << filename << ": " << e.what() << "\n";
+    return false;
+  }
   if (data.size() != 516) {
     std::cout << "Error: VAREG file must be exactly 516 bytes after base64 decoding, but got "
               << data.size() << " bytes.\n";
@@ -968,7 +985,11 @@ auto do_set_vareg(const std::vector<std::string>& tokens) -> bool {
   }
   payload.resize(4096);
   request.set_data(payload.data(), payload.size());
-  log_grpc_error("SetVaRegister", g_stub->SetVaRegister(&context, request, &reply));
+  auto status = g_stub->SetVaRegister(&context, request, &reply);
+  log_grpc_error("SetVaRegister", status);
+  if (!status.ok()) {
+    return false;
+  }
   if (!reply.accepted()) {
     std::cout << "Failed to set VAREG: " << reply.message() << "\n";
     return false;
@@ -1194,14 +1215,20 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
 
+  // Stream context lives outside the reader thread so the main thread can
+  // TryCancel() a blocked Read() if the server does not close the stream.
+  ::grpc::ClientContext stream_context;
+  std::atomic<bool> reader_done{false};
+  std::atomic<bool> readout_failed{false};
+
   auto readout_thread = std::thread([stub = g_stub.get(), &output_datafiles, &frame_counters,
-                                     &frame_counter_mutex, &output_hkfile]() -> void {
+                                     &frame_counter_mutex, &output_hkfile, &stream_context,
+                                     &reader_done, &readout_failed]() -> void {
     ::superhero::DataStreamRequest req;
     ::superhero::DataStreamReply rep;
-    ::grpc::ClientContext context;
 
     auto reader = std::unique_ptr<::grpc::ClientReader<::superhero::DataStreamReply>>(
-        stub->DataStream(&context, req));
+        stub->DataStream(&stream_context, req));
     while (reader->Read(&rep)) {
       const auto logical_address_raw = static_cast<uint32_t>(rep.logical_address());
       if (logical_address_raw > std::numeric_limits<uint8_t>::max()) {
@@ -1219,20 +1246,14 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
                       << ", expected: 32768" << std::endl;
             continue;
           }
-          bool counter_updated = false;
           {
             std::lock_guard<std::mutex> lock(frame_counter_mutex);
-            auto counter_it = frame_counters.find(logical_address);
-            if (counter_it != frame_counters.end()) {
-              counter_it->second += 1;
-              counter_updated = true;
+            if (frame_counters.find(logical_address) == frame_counters.end()) {
+              std::cerr << "Received data frame for unregistered logical address "
+                        << shell::to_hex_string(logical_address) << ", dropping frame data"
+                        << std::endl;
+              continue;
             }
-          }
-          if (!counter_updated) {
-            std::cerr << "Received data frame for unregistered logical address "
-                      << shell::to_hex_string(logical_address) << ", dropping frame data"
-                      << std::endl;
-            continue;
           }
           auto datafile_it = output_datafiles.find(logical_address);
           if (datafile_it == output_datafiles.end() || !datafile_it->second ||
@@ -1244,6 +1265,17 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
           auto raw_data = data.Flatten();
           *(datafile_it->second) << raw_data;
           *(datafile_it->second) << std::flush;
+          if (!datafile_it->second->good()) {
+            std::cerr << "Failed to write frame data for logical address "
+                      << shell::to_hex_string(logical_address) << std::endl;
+            readout_failed.store(true, std::memory_order_relaxed);
+            continue;
+          }
+          // Count only frames that were actually written to disk.
+          {
+            std::lock_guard<std::mutex> lock(frame_counter_mutex);
+            frame_counters[logical_address] += 1;
+          }
           break;
         }
         case superhero::DataStreamType::DataStreamType_HKData: {
@@ -1253,7 +1285,11 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
                       << ", expected: 1024" << std::endl;
             continue;
           }
-          (*output_hkfile) << data.Flatten();
+          (*output_hkfile) << data.Flatten() << std::flush;
+          if (!output_hkfile->good()) {
+            std::cerr << "Failed to write HK data" << std::endl;
+            readout_failed.store(true, std::memory_order_relaxed);
+          }
           break;
         }
         default: {
@@ -1267,55 +1303,73 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     }
     auto finish_status = reader->Finish();
     log_grpc_error("DataStream", finish_status);
-    if (!finish_status.ok()) {
+    if (!finish_status.ok() && finish_status.error_code() != ::grpc::StatusCode::CANCELLED) {
       std::cerr << "DataStream terminated with error: " << finish_status.error_message() << "\n";
+      readout_failed.store(true, std::memory_order_relaxed);
     }
+    reader_done.store(true, std::memory_order_relaxed);
   });
 
-  auto status_thread = std::thread([&frame_counters, duration, &frame_counter_mutex]() -> void {
-    auto start_time = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start_time < duration) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
+  // Progress display runs on the main thread; it owns the shutdown sequence.
+  auto start_time = std::chrono::steady_clock::now();
+  while (std::chrono::steady_clock::now() - start_time < duration) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::map<uint8_t, size_t> counters_snapshot;
+    {
       std::lock_guard<std::mutex> lock(frame_counter_mutex);
-      size_t total_frames = 0;
-      for (const auto& [addr, count] : frame_counters) {
-        total_frames += count;
-      }
-      std::cout << "\r\tFrames: " << total_frames << " | ";
-      for (const auto& [addr, count] : frame_counters) {
-        std::cout << "Addr " << shell::to_hex_string(addr) << ": " << count << "  ";
-      }
-
-      auto elapsed = std::chrono::steady_clock::now() - start_time;
-      auto seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-      auto hours = seconds / 3600;
-      auto minutes = (seconds % 3600) / 60;
-      seconds = seconds % 60;
-      std::cout << "| Elapsed Time: " << std::setfill('0') << std::setw(2) << hours << ":"
-                << std::setfill('0') << std::setw(2) << minutes << ":" << std::setfill('0')
-                << std::setw(2) << seconds << "  " << std::flush;
-      if (g_interrupted.load(std::memory_order_relaxed)) {
-        std::cout << "\nReadout interrupted by SIGINT\n";
-        break;
-      }
+      counters_snapshot = frame_counters;
     }
-    std::cout << "\n";
+    size_t total_frames = 0;
+    for (const auto& [addr, count] : counters_snapshot) {
+      total_frames += count;
+    }
+    std::cout << "\r\tFrames: " << total_frames << " | ";
+    for (const auto& [addr, count] : counters_snapshot) {
+      std::cout << "Addr " << shell::to_hex_string(addr) << ": " << count << "  ";
+    }
+
+    auto elapsed = std::chrono::steady_clock::now() - start_time;
+    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+    auto hours = seconds / 3600;
+    auto minutes = (seconds % 3600) / 60;
+    seconds = seconds % 60;
+    std::cout << "| Elapsed Time: " << std::setfill('0') << std::setw(2) << hours << ":"
+              << std::setfill('0') << std::setw(2) << minutes << ":" << std::setfill('0')
+              << std::setw(2) << seconds << "  " << std::flush;
+    if (g_interrupted.load(std::memory_order_relaxed)) {
+      std::cout << "\nReadout interrupted by SIGINT\n";
+      break;
+    }
+    if (reader_done.load(std::memory_order_relaxed)) {
+      std::cout << "\nData stream closed by server\n";
+      break;
+    }
+  }
+  std::cout << "\n";
+
+  bool stop_ok = true;
+  {
     ::superhero::StopDataStreamRequest stop_req;
     ::superhero::StopDataStreamReply stop_rep;
     ::grpc::ClientContext stop_context;
+    stop_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
     const auto stop_status = g_stub->StopDataStream(&stop_context, stop_req, &stop_rep);
     log_grpc_error("StopDataStream", stop_status);
     if (!stop_status.ok()) {
       std::cerr << "Failed to stop data stream: " << stop_status.error_message() << "\n";
+      stop_ok = false;
     } else if (!stop_rep.accepted()) {
       std::cerr << "Failed to stop data stream: " << stop_rep.message() << "\n";
+      stop_ok = false;
     }
-  });
+  }
 
-  status_thread.join();
+  // Give the reader a moment to drain, then cancel a possibly stuck Read().
+  // TryCancel is harmless if the stream already finished.
+  std::this_thread::sleep_for(1s);
+  stream_context.TryCancel();
   readout_thread.join();
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-  return true;
+  return stop_ok && !readout_failed.load(std::memory_order_relaxed);
 }
 
 auto do_set_hv([[maybe_unused]] const std::vector<std::string>& tokens) -> bool {

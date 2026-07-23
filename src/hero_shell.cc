@@ -2,6 +2,7 @@
 #include <editline/readline.h>
 #include <superhero.grpc.pb.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
@@ -25,67 +26,113 @@ std::string g_current_endpoint{};
 int g_router_count = 0;
 int g_detector_count = 0;
 std::vector<std::string> g_candidate{};
-const std::vector<std::pair<std::vector<ShellState>, std::string>> kCommandList = {
-    {{ShellState::IDLE, ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "help"},
-    {{ShellState::IDLE, ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "sleep"},
-    {{ShellState::IDLE}, "connect"},
-    {{ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "add_detector"},
-    {{ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "remove_detector"},
-    {{ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "add_router"},
-    {{ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "remove_router"},
-    {{ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "remove_all_devices"},
-    {{ShellState::DEVICE_ADDED}, "list_devices"},
-    {{ShellState::DEVICE_ADDED}, "set"},
-    {{ShellState::DEVICE_ADDED}, "configure_fpga"},
-    {{ShellState::DEVICE_ADDED}, "get"},
-    {{ShellState::DEVICE_ADDED}, "set_vareg"},
-    {{ShellState::DEVICE_ADDED}, "show"},
-    {{ShellState::DEVICE_ADDED}, "readout"},
-    {{ShellState::CONNECTED, ShellState::DEVICE_ADDED}, "set_linkspeed"},
-    {{ShellState::DEVICE_ADDED}, "set_hv"},
-    {{ShellState::DEVICE_ADDED}, "get_hv"},
+namespace {
+const std::vector<ShellState> kAllStates = {ShellState::IDLE, ShellState::CONNECTED,
+                                            ShellState::DEVICE_ADDED};
+const std::vector<ShellState> kConnectedStates = {ShellState::CONNECTED, ShellState::DEVICE_ADDED};
+const std::vector<ShellState> kDeviceStates = {ShellState::DEVICE_ADDED};
+}  // namespace
+
+const std::vector<CommandInfo> kCommands = {
+    {"help", "General", kAllStates, "Show this list, or details for one command",
+     R"(Usage: help [command]
+  Show the list of available commands, or details for one command.
+  Typical workflow:
+    1. connect <host:port> to open the gRPC channel to CdTeDE.
+    2. add_detector <logical> then answer target/reply prompts so HL knows the detector path.
+    3. (Optional) get_hv / set_hv <logical> <raw> to inspect or ramp the HV DAC.
+    4. set <parameter> <logical> <value> to configure the detector parameters.
+    5. readout <duration> <file.bin> to start/stop HL data streaming and capture frames.
+  A line starting with '@' runs a script file: @myscript.txt
+  Example: help set)"},
+    {"sleep", "General", kAllStates, "Pause the shell for a duration",
+     R"(Usage: sleep <seconds>
+  Pause the shell for the given number of seconds (Ctrl-C interrupts).
+  Example: sleep 5)"},
+    {"exit", "General", kAllStates, "Terminate the shell",
+     "Usage: exit\n  Terminate the shell. 'quit' is an alias."},
+    {"quit", "General", kAllStates, "Terminate the shell",
+     "Usage: quit\n  Terminate the shell. 'exit' is an alias."},
+
+    {"connect", "Connection", {ShellState::IDLE}, "Open the gRPC channel to the server",
+     R"(Usage: connect <host:port>
+  Open the gRPC channel to the CdTeDE server.
+  Example: connect localhost:50051)"},
+
+    {"add_detector", "Device Management", kConnectedStates,
+     "Register a detector by logical address",
+     R"(Usage: add_detector <logical_address> target_addresses... - reply_addresses...
+  Register a detector at <logical_address> with its SpaceWire target and reply paths.
+  Example: add_detector 0x35 0x02 0x35 - 0x03 0xFE)"},
+    {"remove_detector", "Device Management", kConnectedStates, "Remove a registered detector",
+     "Usage: remove_detector <logical_address>\n  Remove a registered detector."},
+    {"add_router", "Device Management", kConnectedStates, "Register a router by logical address",
+     R"(Usage: add_router <logical_address> target_addresses... - reply_addresses...
+  Register a router at <logical_address> with its SpaceWire target and reply paths.
+  Example: add_router 0x01 0x02 - 0x03)"},
+    {"remove_router", "Device Management", kConnectedStates, "Remove a registered router",
+     "Usage: remove_router <logical_address>\n  Remove a registered router."},
+    {"remove_device", "Device Management", kConnectedStates, "Remove a registered device",
+     "Usage: remove_device <logical_address>\n  Remove a registered device (detector or router)."},
+    {"remove_all_devices", "Device Management", kConnectedStates, "Remove every registered device",
+     "Usage: remove_all_devices\n  Remove every registered detector and router."},
+    {"list_devices", "Device Management", kDeviceStates, "List all registered devices",
+     "Usage: list_devices\n  List logical addresses of all registered devices."},
+    {"list_detectors", "Device Management", kDeviceStates, "List registered detectors",
+     "Usage: list_detectors\n  List logical addresses of registered detectors."},
+    {"list_routers", "Device Management", kDeviceStates, "List registered routers",
+     "Usage: list_routers\n  List logical addresses of registered routers."},
+
+    {"set", "Configuration", kDeviceStates, "Write a register on device(s)",
+     R"(Usage: set <address> <logical|[addr,...]|[all]> <value>
+  Write <value> to register <address> on the given device(s).
+  Example: set PeakingTime1 0x35 100)"},
+    {"get", "Configuration", kDeviceStates, "Read a register from device(s)",
+     R"(Usage: get <address> <logical|[addr,...]|[all]>
+  Read register <address> from the given device(s).
+  Example: get PeakingTime1 [all])"},
+    {"configure_fpga", "Configuration", kDeviceStates, "Configure FPGA timing parameters",
+     R"(Usage: configure_fpga <logical> key=value...
+  Configure all FPGA timing parameters for a detector in one RPC. Required keys:
+    peaking_time_nside=<value> peaking_time_pside=<value>
+    adc_clock_period=<value> readout_clock_period=<value>
+    readout_clock_delay=<value> trig_patlatch_timing=<value>
+    reset_wait_time=<value> reset_wait_time2=<value>
+  Example: configure_fpga 0x35 peaking_time_nside=10 peaking_time_pside=10 adc_clock_period=8 readout_clock_period=8 readout_clock_delay=2 trig_patlatch_timing=4 reset_wait_time=100 reset_wait_time2=100)"},
+    {"set_vareg", "Configuration", kDeviceStates, "Upload a VAREG image to a detector",
+     R"(Usage: set_vareg <logical> <filename>
+  Upload a base64-encoded VAREG image (516 bytes decoded, CRC32-checked) to a detector.
+  Example: set_vareg 0x35 vareg_default.b64)"},
+    {"set_linkspeed", "Configuration", kConnectedStates, "Change the SpaceWire link speed",
+     R"(Usage: set_linkspeed <10MHz|20MHz|25MHz|33MHz|50MHz|100MHz>
+  Change the SpaceWire link speed.
+  Example: set_linkspeed 50MHz)"},
+    {"set_hv", "Configuration", kDeviceStates, "Ramp the HV DAC",
+     "Usage: set_hv <logical> <raw>\n  Ramp the HV DAC. (Not implemented yet.)"},
+    {"get_hv", "Configuration", kDeviceStates, "Inspect the HV DAC",
+     "Usage: get_hv <logical>\n  Inspect the HV DAC. (Not implemented yet.)"},
+
+    {"show", "Data Acquisition", kDeviceStates, "Dump status/timing registers",
+     "Usage: show <logical>\n  Dump the common status/timing registers for a device."},
+    {"readout", "Data Acquisition", kDeviceStates, "Start/stop HL data streaming",
+     R"(Usage: readout <duration> <output_file_prefix>
+  Start HL data streaming for <duration>, writing per-detector and HK files.
+  <duration> accepts combined units, e.g. 10s, 90min, 1h30min.
+  Example: readout 1h30min run001)"},
 };
 
-const std::map<std::string, std::string> kHelps = {
-    {"help",
-     R"(
-1. connect <host:port> to open the gRPC channel to CdTeDE.
-2. add_detector <logical> then answer target/reply prompts so HL knows the detector path.
-3. (Optional) get_hv / set_hv <logical> <raw> to inspect or ramp the HV DAC.
-4. set <logical> <parameter> <value> to configure the detector parameters.
-5. readout <duration> <file.bin> to start/stop HL data streaming and capture frames;
-   use rmap_read/write for ad-hoc LL pokes (addresses from cdtedsd_address.hh).)"},
+auto find_command(const std::string& name) -> const CommandInfo* {
+  for (const auto& info : kCommands) {
+    if (info.name == name) {
+      return &info;
+    }
+  }
+  return nullptr;
+}
 
-    {"sleep", "Usage: sleep <seconds>"},
-    {"connect", "Usage: connect <host:port>"},
-
-    {"add_detector",
-     "Usage: add_detector <logical_address> target_addresses... - reply_addresses..."},
-    {"add_router", "Usage: add_router <logical_address> target_addresses... - reply_addresses..."},
-
-    {"remove_detector", "Usage: remove_detector <logical_address>"},
-    {"remove_router", "Usage: remove_router <logical_address>"},
-    {"remove_device", "Usage: remove_device <logical_address>"},
-
-    {"remove_all_devices", "Usage: remove_all_devices"},
-
-    {"list_detectors", "Usage: list_detectors"},
-    {"list_routers", "Usage: list_routers"},
-    {"list_devices", "Usage: list_devices"},
-
-    {"set", "Usage: set <address> <logical|[addr,...]|[all]> <value>"},
-    {"configure_fpga",
-     R"(Usage: configure_fpga <logical>
-  peaking_time_nside=<value> peaking_time_pside=<value>
-  adc_clock_period=<value> readout_clock_period=<value>
-  readout_clock_delay=<value> trip_patlatch_timing=<value>
-  reset_wait_time=<value> reset_wait_time2=<value>)"},
-    {"get", "Usage: get <address> <logical|[addr,...]|[all]>"},
-    {"set_vareg", "Usage: set_vareg <logical> <filename with {}>"},
-    {"show", "Usage: show <logical>"},
-    {"readout", "Usage: readout <duration_seconds> <output_file.bin>"},
-    {"set_linkspeed", "Usage: set_linkspeed <10MHz|20MHz|25MHz|33MHz|50MHz|100MHz>"},
-};
+auto command_available(const CommandInfo& info) -> bool {
+  return std::find(info.states.begin(), info.states.end(), g_current_state) != info.states.end();
+}
 
 namespace {
 
@@ -126,6 +173,28 @@ void log_grpc_error(const std::string& api, const grpc::Status& status) {
   }
 }
 
+namespace {
+
+// The proto carries logical addresses as uint32, but SpaceWire RMAP logical
+// addresses are one byte. Validate at the server boundary instead of silently
+// truncating (0x101 must not alias 0x01).
+template <typename RepeatedField>
+auto to_uint8_addresses(const std::string& api, const RepeatedField& raw_addresses)
+    -> std::vector<uint8_t> {
+  std::vector<uint8_t> addresses;
+  for (const auto& addr : raw_addresses) {
+    if (static_cast<uint32_t>(addr) > 0xFFu) {
+      std::cerr << "[" << api << "] Ignoring out-of-range logical address " << addr
+                << " (must fit in one byte)\n";
+      continue;
+    }
+    addresses.push_back(static_cast<uint8_t>(addr));
+  }
+  return addresses;
+}
+
+}  // namespace
+
 auto get_detector_logical_addresses() -> std::optional<std::vector<uint8_t>> {
   if (!g_stub) {
     return std::nullopt;
@@ -138,11 +207,7 @@ auto get_detector_logical_addresses() -> std::optional<std::vector<uint8_t>> {
   if (!status.ok()) {
     return std::nullopt;
   }
-  std::vector<uint8_t> addresses;
-  for (const auto& addr : reply.logical_address()) {
-    addresses.push_back(addr);
-  }
-  return addresses;
+  return to_uint8_addresses("GetDetectorList", reply.logical_address());
 }
 
 auto get_router_logical_addresses() -> std::optional<std::vector<uint8_t>> {
@@ -157,11 +222,7 @@ auto get_router_logical_addresses() -> std::optional<std::vector<uint8_t>> {
   if (!status.ok()) {
     return std::nullopt;
   }
-  std::vector<uint8_t> addresses;
-  for (const auto& addr : reply.logical_address()) {
-    addresses.push_back(addr);
-  }
-  return addresses;
+  return to_uint8_addresses("GetRouterList", reply.logical_address());
 }
 
 auto get_device_logical_addresses() -> std::optional<std::vector<uint8_t>> {
@@ -176,11 +237,7 @@ auto get_device_logical_addresses() -> std::optional<std::vector<uint8_t>> {
   if (!status.ok()) {
     return std::nullopt;
   }
-  std::vector<uint8_t> addresses;
-  for (const auto& addr : reply.logical_address()) {
-    addresses.push_back(addr);
-  }
-  return addresses;
+  return to_uint8_addresses("GetDeviceList", reply.logical_address());
 }
 
 void update_device_counts() {
@@ -254,21 +311,24 @@ auto build_prompt() -> PromptInfo {
   return prompt;
 }
 
-auto load_script(const std::string& filename) -> bool;
+auto load_script(const std::string& filename, int depth) -> bool;
 auto execute_command(const std::string& line, int depth) -> bool;
 
-auto load_script(const std::string& filename) -> bool {
+auto load_script(const std::string& filename, int depth) -> bool {
   std::ifstream script_file(filename);
   if (!script_file.is_open()) {
     std::cout << "Failed to open script file: " << filename << "\n";
-    return true;
+    return false;
   }
   std::string raw_line;
+  int line_number = 0;
   while (std::getline(script_file, raw_line)) {
+    ++line_number;
+    const int command_line = line_number;
     if (g_interrupted.load(std::memory_order_relaxed)) {
       std::cout << "^C\n";
       g_interrupted.store(false, std::memory_order_relaxed);
-      break;
+      return false;
     }
     if (!raw_line.empty() && raw_line.back() == '\r') {
       raw_line.pop_back();
@@ -277,9 +337,11 @@ auto load_script(const std::string& filename) -> bool {
     while (consume_line_continuation(line)) {
       std::string continuation;
       if (!std::getline(script_file, continuation)) {
-        std::cout << "Unexpected EOF while reading continued command\n";
+        std::cout << filename << ":" << line_number
+                  << ": unexpected EOF while reading continued command\n";
         break;
       }
+      ++line_number;
       if (!continuation.empty() && continuation.back() == '\r') {
         continuation.pop_back();
       }
@@ -294,9 +356,9 @@ auto load_script(const std::string& filename) -> bool {
     }
     const auto prompt = build_prompt();
     std::cout << prompt.display_text << line << "\n";
-    if (!execute_command(line, 1)) {
-      std::cout << "Error executing command in script: " << line << "\n";
-      break;
+    if (!execute_command(line, depth + 1)) {
+      std::cout << filename << ":" << command_line << ": error executing: " << line << "\n";
+      return false;
     }
   }
   return true;
@@ -383,13 +445,13 @@ auto execute_command(const std::string& line, int depth) -> bool {
   }
   if (tokens[0][0] == '@') {
     std::string script_file = tokens[0].substr(1);
-    return load_script(script_file);
+    return load_script(script_file, depth);
   }
   if (tokens[0] == "exit" || tokens[0] == "quit") {
     std::exit(0);
   }
 
-  std::cout << "Unknown command: " << tokens[0] << "\n";
+  std::cout << "Unknown command: " << tokens[0] << ". Type 'help' to see available commands.\n";
   return false;
 }
 

@@ -181,6 +181,54 @@ auto router_address_completion(const char* text) -> char** {
   return rl_completion_matches(text, completion_generator);
 }
 
+auto help_command_completion(const char* text) -> char** {
+  for (const auto& info : kCommands) {
+    if (info.name.find(text) == 0) {
+      g_candidate.emplace_back(info.name);
+    }
+  }
+  rl_attempted_completion_over = 1;
+  return rl_completion_matches(text, completion_generator);
+}
+
+auto set_get_device_completion(const char* text) -> char** {
+  if (const auto devices = get_device_logical_addresses()) {
+    for (const auto& addr : *devices) {
+      auto addr_str = shell::to_hex_string(addr);
+      if (addr_str.find(text) == 0) {
+        g_candidate.emplace_back(addr_str);
+      }
+    }
+  }
+  static constexpr std::string_view kAllLiteral = "[all]";
+  if (kAllLiteral.find(text) == 0) {
+    g_candidate.emplace_back(kAllLiteral);
+  }
+  rl_attempted_completion_over = 1;
+  return rl_completion_matches(text, completion_generator);
+}
+
+auto configure_fpga_key_completion(const char* text) -> char** {
+  static constexpr std::array<const char*, 8> kKeys{
+      "peaking_time_nside",   "peaking_time_pside",  "adc_clock_period",
+      "readout_clock_period", "readout_clock_delay", "trig_patlatch_timing",
+      "reset_wait_time",      "reset_wait_time2"};
+  const std::string_view current_text(text);
+  if (current_text.find('=') != std::string_view::npos) {
+    // Already has a value part; do not offer key= or filename completions.
+    rl_attempted_completion_over = 1;
+    return rl_completion_matches(text, completion_generator);
+  }
+  for (const auto* key : kKeys) {
+    if (std::string_view(key).find(current_text) == 0) {
+      g_candidate.emplace_back(std::string(key) + "=");
+    }
+  }
+  rl_attempted_completion_over = 1;
+  rl_completion_append_character = '\0';
+  return rl_completion_matches(text, completion_generator);
+}
+
 auto link_speed_completion(const char* text) -> char** {
   static constexpr std::array<const char*, 6> kOptions{"10MHz", "20MHz", "25MHz",
                                                        "33MHz", "50MHz", "100MHz"};
@@ -194,10 +242,9 @@ auto link_speed_completion(const char* text) -> char** {
 }
 
 auto command_completion(const char* text) -> char** {
-  for (const auto& [states, command] : kCommandList) {
-    if (std::find(states.begin(), states.end(), g_current_state) != states.end() &&
-        command.find(text) == 0) {
-      g_candidate.emplace_back(command);
+  for (const auto& info : kCommands) {
+    if (command_available(info) && info.name.find(text) == 0) {
+      g_candidate.emplace_back(info.name);
     }
   }
   rl_attempted_completion_over = 1;
@@ -208,6 +255,9 @@ auto command_completion(const char* text) -> char** {
 
 auto repl_completion(const char* text, int start, int end) -> char** {
   g_candidate.clear();
+  // Reset the '=' trick from a previous configure_fpga completion so it does
+  // not leak into unrelated completions later in the session.
+  rl_completion_append_character = ' ';
 
   if (start == 0) {
     return command_completion(text);
@@ -218,49 +268,63 @@ auto repl_completion(const char* text, int start, int end) -> char** {
   const bool starting_new_token = (end == start);
   const bool editing_token = (end > start);
 
-  if (((argc == 1 && starting_new_token) || (argc == 2 && editing_token)) &&
-      !current_command.empty() &&
-      (current_command[0] == "remove_device" || current_command[0] == "set_vareg" ||
-       current_command[0] == "show")) {
-    return device_address_completion(text);
-  }
+  // arg_index_is(n): true when the token being completed is the n-th
+  // argument (1-based, excluding the command name itself), i.e. either a
+  // brand-new token being started right after n-1 existing arguments, or an
+  // in-progress edit of the n-th argument.
+  auto arg_index_is = [&](std::size_t n) -> bool {
+    return (argc == n && starting_new_token) || (argc == n + 1 && editing_token);
+  };
 
-  if (((argc == 1 && starting_new_token) || (argc == 2 && editing_token)) &&
-      !current_command.empty() && current_command[0] == "remove_detector") {
-    return detector_address_completion(text);
-  }
+  if (!current_command.empty()) {
+    const auto& command = current_command[0];
 
-  if (((argc == 1 && starting_new_token) || (argc == 2 && editing_token)) &&
-      !current_command.empty() && current_command[0] == "remove_router") {
-    return router_address_completion(text);
-  }
+    if (arg_index_is(1) &&
+        (command == "remove_device" || command == "set_vareg" || command == "show")) {
+      return device_address_completion(text);
+    }
 
-  if (((argc == 1 && starting_new_token) || (argc == 2 && editing_token)) &&
-      !current_command.empty() && (current_command[0] == "get")) {
-    return read_address_completion(text);
-  }
-  if (((argc == 1 && starting_new_token) || (argc == 2 && editing_token)) &&
-      !current_command.empty() && (current_command[0] == "set")) {
-    return write_address_completion(text);
-  }
-  if (((argc == 2 && starting_new_token) || (argc == 3 && editing_token)) &&
-      !current_command.empty() && (current_command[0] == "set" || current_command[0] == "get")) {
-    return device_address_completion(text);
-  }
+    if (arg_index_is(1) && command == "remove_detector") {
+      return detector_address_completion(text);
+    }
 
-  if (((argc == 2 && starting_new_token) || (argc == 3 && editing_token)) &&
-      !current_command.empty() && (current_command[0] == "set_vareg")) {
-    return rl_completion_matches(text, rl_filename_completion_function);
-  }
+    if (arg_index_is(1) && command == "remove_router") {
+      return router_address_completion(text);
+    }
 
-  if (((argc == 2 && starting_new_token) || (argc == 3 && editing_token)) &&
-      !current_command.empty() && current_command[0] == "readout") {
-    return rl_completion_matches(text, rl_filename_completion_function);
-  }
+    if (arg_index_is(1) && command == "get") {
+      return read_address_completion(text);
+    }
+    if (arg_index_is(1) && command == "set") {
+      return write_address_completion(text);
+    }
+    if (arg_index_is(2) && (command == "set" || command == "get")) {
+      return set_get_device_completion(text);
+    }
 
-  if (((argc == 1 && starting_new_token) || (argc == 2 && editing_token)) &&
-      !current_command.empty() && current_command[0] == "set_linkspeed") {
-    return link_speed_completion(text);
+    if (arg_index_is(2) && command == "set_vareg") {
+      return rl_completion_matches(text, rl_filename_completion_function);
+    }
+
+    if (arg_index_is(2) && command == "readout") {
+      return rl_completion_matches(text, rl_filename_completion_function);
+    }
+
+    if (arg_index_is(1) && command == "set_linkspeed") {
+      return link_speed_completion(text);
+    }
+
+    if (arg_index_is(1) && command == "configure_fpga") {
+      return device_address_completion(text);
+    }
+    if (command == "configure_fpga" &&
+        ((argc >= 2 && starting_new_token) || (argc >= 3 && editing_token))) {
+      return configure_fpga_key_completion(text);
+    }
+
+    if (arg_index_is(1) && command == "help") {
+      return help_command_completion(text);
+    }
   }
 
   if (g_candidate.empty() && start > 0 && rl_line_buffer[start - 1] == '@') {

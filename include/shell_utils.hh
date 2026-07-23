@@ -1,7 +1,14 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <chrono>
+#include <cstdint>
 #include <functional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace shell {
@@ -121,16 +128,13 @@ inline auto parse_duration(std::string_view sv) -> std::chrono::nanoseconds {
   trim(sv);
   if (sv.empty()) throw std::invalid_argument("empty duration string");
 
-  nanoseconds total{0};
+  double total_seconds = 0.0;
   std::size_t pos = 0;
 
   while (pos < sv.size()) {
     // --- 数値を読む ---
     std::size_t start_num = pos;
     bool seen_dot = false;
-
-    // +/- を許容
-    if (pos < sv.size() && (sv[pos] == '+' || sv[pos] == '-')) pos++;
 
     while (pos < sv.size()) {
       char c = sv[pos];
@@ -168,10 +172,15 @@ inline auto parse_duration(std::string_view sv) -> std::chrono::nanoseconds {
       throw std::invalid_argument("duration: unknown unit '" + unit + "'");
     }
 
-    total += duration_cast<nanoseconds>(duration<double>(seconds));
+    total_seconds += seconds;
+    // ~31.7 years; guards against nanoseconds overflow of the accumulated sum.
+    // (The negated comparison also rejects NaN.)
+    if (!(total_seconds <= 1.0e9)) {
+      throw std::out_of_range("duration: value out of range");
+    }
   }
 
-  return total;
+  return duration_cast<nanoseconds>(duration<double>(total_seconds));
 }
 
 inline auto parse_uint8(const std::string& s) -> int {

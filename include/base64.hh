@@ -42,7 +42,7 @@ inline auto base64_decode(const std::string& s) -> std::vector<uint8_t> {
     if (v == -1) {
       throw std::invalid_argument("Invalid base64 character");
     }
-    if (v == -2) {
+    if (v == -2) {  // '=' padding terminates the payload
       break;
     }
     acc = (acc << 6) | static_cast<uint32_t>(v);
@@ -52,6 +52,7 @@ inline auto base64_decode(const std::string& s) -> std::vector<uint8_t> {
       out.push_back(static_cast<uint8_t>((acc >> bits) & 0xFFu));
     }
   }
+  // Callers validate the decoded length, which catches truncated input.
   return out;
 }
 
