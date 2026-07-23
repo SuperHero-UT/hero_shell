@@ -302,6 +302,11 @@ auto build_prompt() -> PromptInfo {
   if (g_current_state == ShellState::IDLE || g_current_endpoint.empty()) {
     const std::string plain_prompt = "hero_shell[-]> ";
     prompt.visible_length = plain_prompt.size();
+    if (!shell::stdout_is_tty()) {
+      prompt.display_text = plain_prompt;
+      prompt.readline_text = plain_prompt;
+      return prompt;
+    }
     prompt.display_text =
         bold_on_display + "hero_shell[" + router_color_display + "-" + bold_off_display + "]> ";
     prompt.readline_text =
@@ -313,6 +318,11 @@ auto build_prompt() -> PromptInfo {
                              std::to_string(g_router_count) + "," +
                              std::to_string(g_detector_count) + ")]> ";
   prompt.visible_length = plain_prompt.size();
+  if (!shell::stdout_is_tty()) {
+    prompt.display_text = plain_prompt;
+    prompt.readline_text = plain_prompt;
+    return prompt;
+  }
   prompt.display_text = bold_on_display + "hero_shell[" + g_current_endpoint + "(" +
                         router_color_display + std::to_string(g_router_count) + bold_off_display +
                         "," + detector_color_display + std::to_string(g_detector_count) +
@@ -540,12 +550,43 @@ auto run_shell() -> int {
   return 0;
 }
 
+namespace {
+
+void print_cli_usage() {
+  std::cout << "Usage: hero_shell [script_file]\n"
+               "\n"
+               "Interactive gRPC shell for the CdTeDE detector server.\n"
+               "With a script file, executes its commands and exits\n"
+               "(exit code 1 if any command fails).\n"
+               "\n"
+               "Options:\n"
+               "  -h, --help     Show this help and exit\n"
+               "  -v, --version  Show version and exit\n"
+               "\n"
+               "Type 'help' inside the shell for the command list.\n";
+}
+
+}  // namespace
+
 auto main(int argc, char** argv) -> int {
   install_sigint_handler();
   if (argc > 1) {
-    std::string script_file = argv[1];
-    if (!execute_command("@" + script_file, 0)) {
-      std::cerr << "Error executing script file: " << script_file << "\n";
+    const std::string arg = argv[1];
+    if (arg == "-h" || arg == "--help") {
+      print_cli_usage();
+      return 0;
+    }
+    if (arg == "-v" || arg == "--version") {
+      std::cout << "hero_shell " << HERO_SHELL_VERSION << "\n";
+      return 0;
+    }
+    if (arg[0] == '-') {
+      std::cerr << "Unknown option: " << arg << "\n\n";
+      print_cli_usage();
+      return 1;
+    }
+    if (!execute_command("@" + arg, 0)) {
+      std::cerr << "Error executing script file: " << arg << "\n";
       return 1;
     }
     return 0;
