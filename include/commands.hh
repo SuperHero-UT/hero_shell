@@ -21,6 +21,7 @@ auto do_get(const std::vector<std::string>& tokens) -> bool;
 auto do_set_vareg(const std::vector<std::string>& tokens) -> bool;
 auto do_show(const std::vector<std::string>& tokens) -> bool;
 auto do_readout(const std::vector<std::string>& tokens) -> bool;
+void shutdown_readout();
 auto do_set_hv(const std::vector<std::string>& tokens) -> bool;
 auto do_get_hv(const std::vector<std::string>& tokens) -> bool;
 auto do_set_linkspeed(const std::vector<std::string>& tokens) -> bool;

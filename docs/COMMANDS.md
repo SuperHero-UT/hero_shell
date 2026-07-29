@@ -104,6 +104,7 @@ connect <host:port>
 ```
 
 Opens an insecure gRPC channel to the CdTeDE server and verifies it with an echo request.
+Press `Ctrl-C` to cancel a pending connection attempt.
 
 Example:
 
@@ -111,7 +112,7 @@ Example:
 connect localhost:50051
 ```
 
-A failed connection clears the partially created channel and stub.
+A failed or interrupted connection leaves the shell disconnected.
 
 ## Device Management Commands
 
@@ -369,9 +370,24 @@ Each normal four-byte register is printed as a left-aligned register name follow
 
 ```text
 readout <duration> <output_file_prefix>
+readout status
+readout stop
 ```
 
-Starts HL data streaming, records data for the requested duration, then stops the stream.
+Starts HL data streaming, records data for the requested duration, then stops the stream. In an
+interactive shell the acquisition runs in the background: `get`, `show`, and device-list commands
+remain available. Use `readout status` to check whether it is active and `readout stop` to request
+an early stop. Configuration, device-management, connection, and additional readout-start commands
+are rejected while a readout is active; `@script` is rejected as well. `help`, `sleep`, `exit`, and
+`quit` remain available. `exit`/`quit` requests a stop and waits for the readout worker to finish.
+
+`readout status` reports whether the worker is starting, running, stopping, or finished. While it
+is running, it shows the total and per-detector frame counts, elapsed time, and remaining time. On
+completion it reports the final result and final frame counts. `readout stop` is asynchronous: it
+requests shutdown. A second `readout <duration> <prefix>` is rejected until the active worker has
+finished.
+If the initial stream-start RPC does not respond within 10 seconds, the readout fails rather than
+leaving the interactive shell unable to stop or exit.
 
 Example:
 
@@ -416,7 +432,9 @@ One binary data file is created per registered detector; HK data is written to t
 
 Data frames must be 32,768 bytes and HK frames must be 1,024 bytes; malformed or unregistered-address frames are dropped. Data and HK output files receive extended attributes for acquisition date, exposure seconds, and logical address where supported by the platform.
 
-`Ctrl-C` interrupts the acquisition, requests stream shutdown, and makes the command fail.
+In interactive mode, `Ctrl-C` both cancels the current input and requests shutdown of an active
+readout. Check `readout status` for its final result. In script mode, readout remains foreground
+and `Ctrl-C` aborts that command.
 
 ## Scripting
 
@@ -457,15 +475,21 @@ Tab completion is state-aware for command names and includes:
 - `[all]` for the device argument of `set` and `get`.
 - FPGA configuration keys, completing as `key=`.
 - Link-speed values.
+- `status` and `stop` for `readout`.
 - Filenames for `set_vareg`, `readout`, and `@script`.
 
 History is loaded from and written to `.hero_shell_history`, with the in-memory history limited to 1000 entries.
 
-`Ctrl-C` interrupts blocked interactive input, `sleep`, script execution, and readout. At the prompt, it prints `^C` and returns to a fresh prompt.
+`Ctrl-C` interrupts blocked interactive input, `sleep`, and script execution. When an interactive
+readout is active, it also requests that readout stop. At the prompt it prints `^C` and returns to a
+fresh prompt.
 
 ## TTY and Redirected Output
 
-When standard output is a TTY, the shell uses ANSI styling in prompts and `help`, and shows live countdown/readout progress using carriage-return updates.
+When standard output is a TTY, the shell uses ANSI styling in prompts and `help`, and shows live
+countdown/readout progress using carriage-return updates for foreground (scripted) readout. An
+interactive background readout suppresses completion output and the live line so it cannot
+overwrite the command being typed; use `readout status` instead.
 
 When standard output is redirected, styling and live progress are suppressed so output remains suitable for logs. Script prompts are plain when redirected.
 

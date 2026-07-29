@@ -6,8 +6,9 @@
 
 - **Interactive Shell**: Includes state-aware tab completion, history management, and categorized command help.
 - **Batch Script Mode**: Supports robust script execution with fail-fast `file:line` errors and non-zero exit codes on failure for CI/CD or automated pipelines.
-- **TTY-Aware Output**: Provides ANSI styling and a live progress display in interactive sessions, while automatically falling back to plain, clean output suitable for batch logs when redirected.
+- **TTY-Aware Output**: Provides ANSI styling and a live progress display for foreground/scripted readout, while automatically falling back to plain, clean output suitable for batch logs when redirected.
 - **Comprehensive Readout**: Handles data streaming with per-detector binary files, dedicated HK files, extended attributes for metadata, and detailed acquisition summaries.
+- **Concurrent Readout Monitoring**: Interactive readout runs in the background, allowing safe read-only inspection commands during acquisition.
 
 ## Requirements & Build
 
@@ -40,9 +41,17 @@ Connected to localhost:50051
 hero_shell[localhost:50051(0,0)]> add_detector 0x35 0x02 0x35 - 0x03 0xFE
 hero_shell[localhost:50051(0,1)]> configure_fpga 0x35 peaking_time_nside=10 peaking_time_pside=10 adc_clock_period=8 readout_clock_period=8 readout_clock_delay=2 trig_patlatch_timing=4 reset_wait_time=100 reset_wait_time2=100
 hero_shell[localhost:50051(0,1)]> readout 10s run001
+Readout started in the background. Use 'readout status' or 'readout stop'.
+hero_shell[localhost:50051(0,1)]> show 0x35
 ```
 
 The prompt shows the connected endpoint and the registered `(router, detector)` counts.
+While a readout is active, `get`, `show`, `list_devices`, `list_detectors`, and `list_routers`
+remain available. `readout status` shows total and per-detector frame counts plus elapsed and
+remaining time; use `readout stop` to request an early stop. Commands that change configuration or
+topology are temporarily rejected to protect the acquisition. Exiting the shell requests a stop
+and waits for the readout to finish. Completion is reported by `readout status`, keeping the prompt
+usable while the background worker finishes.
 
 ### Batch Script
 
