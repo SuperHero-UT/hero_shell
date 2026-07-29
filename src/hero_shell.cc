@@ -19,6 +19,9 @@
 #include "shell_utils.hh"
 
 std::atomic<bool> g_interrupted{false};
+std::atomic<bool> g_readout_active{false};
+std::atomic<bool> g_readout_stop_requested{false};
+bool g_interactive_shell = false;
 std::shared_ptr<grpc::Channel> g_channel = nullptr;
 std::unique_ptr<superhero::CommunicationService::Stub> g_stub = nullptr;
 ShellState g_current_state = ShellState::IDLE;
@@ -58,6 +61,7 @@ const std::vector<CommandInfo> kCommands = {
     {"connect", "Connection", {ShellState::IDLE}, "Open the gRPC channel to the server",
      R"(Usage: connect <host:port>
   Open the gRPC channel to the CdTeDE server.
+  Ctrl-C cancels a pending connection attempt.
   Example: connect localhost:50051)"},
 
     {"add_detector", "Device Management", kConnectedStates,
@@ -117,7 +121,12 @@ const std::vector<CommandInfo> kCommands = {
      "Usage: show <logical>\n  Dump the common status/timing registers for a device."},
     {"readout", "Data Acquisition", kDeviceStates, "Start/stop HL data streaming",
      R"(Usage: readout <duration> <output_file_prefix>
+       readout status
+       readout stop
   Start HL data streaming for <duration>, writing per-detector and HK files.
+  In an interactive shell, readout runs in the background so `get`, `show`, and
+  device-list commands remain available. Use `readout status` to inspect it or
+  `readout stop` to stop it early. Status shows frame counts and elapsed/remaining time.
   <duration> accepts combined units, e.g. 10s, 90min, 1h30min.
   Example: readout 1h30min run001)"},
 };
@@ -144,6 +153,9 @@ bool g_history_loaded = false;
 
 void handle_sigint(int) {
   g_interrupted.store(true, std::memory_order_relaxed);
+  if (g_readout_active.load(std::memory_order_relaxed)) {
+    g_readout_stop_requested.store(true, std::memory_order_relaxed);
+  }
 }
 
 // Installed without SA_RESTART so a blocked readline read() returns EINTR.
@@ -397,6 +409,18 @@ auto execute_command(const std::string& line, int depth) -> bool {
   if (tokens.empty() || tokens[0].empty()) {
     return true;
   }
+  if (g_readout_active.load(std::memory_order_relaxed)) {
+    static const std::vector<std::string> kReadoutSafeCommands = {
+        "help", "sleep", "get", "show", "list_devices", "list_detectors", "list_routers",
+        "readout", "exit", "quit"};
+    if (std::find(kReadoutSafeCommands.begin(), kReadoutSafeCommands.end(), tokens[0]) ==
+        kReadoutSafeCommands.end()) {
+      std::cout << "Command '" << tokens[0]
+                << "' is unavailable during readout. Only read-only commands and "
+                   "'readout status/stop' are allowed.\n";
+      return false;
+    }
+  }
   if (tokens[0] == "help") {
     return do_help(tokens);
   }
@@ -472,6 +496,7 @@ auto execute_command(const std::string& line, int depth) -> bool {
     return load_script(script_file, depth);
   }
   if (tokens[0] == "exit" || tokens[0] == "quit") {
+    shutdown_readout();
     // std::exit skips local destructors, so persist history explicitly.
     if (g_history_loaded) {
       write_history(kHistoryFile);
@@ -484,6 +509,7 @@ auto execute_command(const std::string& line, int depth) -> bool {
 }
 
 auto run_shell() -> int {
+  g_interactive_shell = true;
   rl_catch_signals = 0;
 
   rl_attempted_completion_function = repl_completion;
@@ -548,6 +574,8 @@ auto run_shell() -> int {
     execute_command(line, 0);
   }
 
+  shutdown_readout();
+  g_interactive_shell = false;
   return 0;
 }
 

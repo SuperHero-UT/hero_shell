@@ -241,6 +241,17 @@ auto link_speed_completion(const char* text) -> char** {
   return rl_completion_matches(text, completion_generator);
 }
 
+auto readout_action_completion(const char* text) -> char** {
+  static constexpr std::array<const char*, 2> kActions{"status", "stop"};
+  for (const auto* action : kActions) {
+    if (std::string_view(action).find(text) == 0) {
+      g_candidate.emplace_back(action);
+    }
+  }
+  rl_attempted_completion_over = 1;
+  return rl_completion_matches(text, completion_generator);
+}
+
 auto command_completion(const char* text) -> char** {
   for (const auto& info : kCommands) {
     if (command_available(info) && info.name.find(text) == 0) {
@@ -304,6 +315,10 @@ auto repl_completion(const char* text, int start, int end) -> char** {
 
     if (arg_index_is(2) && command == "set_vareg") {
       return rl_completion_matches(text, rl_filename_completion_function);
+    }
+
+    if (arg_index_is(1) && command == "readout") {
+      return readout_action_completion(text);
     }
 
     if (arg_index_is(2) && command == "readout") {

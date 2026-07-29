@@ -19,6 +19,11 @@ enum class ShellState {
 };
 
 extern std::atomic<bool> g_interrupted;
+// Readout has its own cancellation state because it can run while the main
+// thread is blocked in readline (where g_interrupted is cleared for input).
+extern std::atomic<bool> g_readout_active;
+extern std::atomic<bool> g_readout_stop_requested;
+extern bool g_interactive_shell;
 extern std::shared_ptr<grpc::Channel> g_channel;
 extern std::unique_ptr<superhero::CommunicationService::Stub> g_stub;
 extern ShellState g_current_state;

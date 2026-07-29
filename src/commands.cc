@@ -82,6 +82,56 @@ auto trim_copy(const std::string& input) -> std::string {
 
 std::string g_last_set_vareg_path = "N/A";
 
+struct ReadoutStatus {
+  std::chrono::nanoseconds duration{};
+  std::chrono::steady_clock::time_point start_time{};
+  std::map<uint8_t, size_t> frame_counters;
+  bool started = false;
+  bool has_result = false;
+  bool succeeded = false;
+  bool stop_requested = false;
+};
+
+std::mutex g_readout_status_mutex;
+ReadoutStatus g_readout_status;
+
+void reset_readout_status(std::chrono::nanoseconds duration) {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  g_readout_status = {};
+  g_readout_status.duration = duration;
+}
+
+void mark_readout_started() {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  g_readout_status.start_time = std::chrono::steady_clock::now();
+  g_readout_status.started = true;
+}
+
+void increment_readout_frame_count(uint8_t logical_address) {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  g_readout_status.frame_counters[logical_address] += 1;
+}
+
+void finish_readout_status(bool succeeded, bool stop_requested) {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  g_readout_status.has_result = true;
+  g_readout_status.succeeded = succeeded;
+  g_readout_status.stop_requested = stop_requested;
+}
+
+auto readout_status_snapshot() -> ReadoutStatus {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  return g_readout_status;
+}
+
+auto format_elapsed_time(std::chrono::steady_clock::duration elapsed) -> std::string {
+  const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+  std::ostringstream out;
+  out << std::setfill('0') << std::setw(2) << seconds / 3600 << ':' << std::setw(2)
+      << (seconds % 3600) / 60 << ':' << std::setw(2) << seconds % 60;
+  return out.str();
+}
+
 auto ensure_grpc_initialized() -> bool {
   if (!g_stub) {
     std::cout
@@ -315,18 +365,48 @@ auto do_connect(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
   std::cout << "Connecting to " << tokens[1] << "...\n";
-  g_channel = grpc::CreateChannel(tokens[1], grpc::InsecureChannelCredentials());
-  g_stub = superhero::CommunicationService::NewStub(g_channel);
-  try {
-    superhero::grpc::echo(*g_stub, "Hello, CdTeDE!");
-    std::this_thread::sleep_for(100ms);
-  } catch (const std::exception& e) {
-    std::cout << "Connection failed: " << e.what() << "\n";
-    // Do not leave a half-initialized stub behind; commands gate on g_stub.
-    g_stub.reset();
-    g_channel.reset();
+  // Keep the new channel local until its Echo succeeds so an interrupted
+  // connection never leaves the shell in a partially connected state.
+  auto channel = grpc::CreateChannel(tokens[1], grpc::InsecureChannelCredentials());
+  auto stub = superhero::CommunicationService::NewStub(channel);
+
+  superhero::EchoRequest request;
+  request.set_message("Hello, CdTeDE!");
+  superhero::EchoReply reply;
+  grpc::ClientContext context;
+  grpc::CompletionQueue completion_queue;
+  auto rpc = stub->AsyncEcho(&context, request, &completion_queue);
+  grpc::Status status;
+  void* tag = nullptr;
+  bool ok = false;
+  rpc->Finish(&reply, &status, &tag);
+
+  bool cancelled = false;
+  while (true) {
+    const auto next_status = completion_queue.AsyncNext(
+        &tag, &ok, std::chrono::system_clock::now() + std::chrono::milliseconds(100));
+    if (next_status == grpc::CompletionQueue::GOT_EVENT) {
+      break;
+    }
+    if (g_interrupted.load(std::memory_order_relaxed) && !cancelled) {
+      context.TryCancel();
+      cancelled = true;
+    }
+  }
+  completion_queue.Shutdown();
+
+  if (g_interrupted.load(std::memory_order_relaxed)) {
+    std::cout << "Connection interrupted by SIGINT\n";
+    g_interrupted.store(false, std::memory_order_relaxed);
     return false;
   }
+  if (!ok || !status.ok()) {
+    std::cout << "Connection failed: " << status.error_message() << "\n";
+    return false;
+  }
+
+  g_channel = std::move(channel);
+  g_stub = std::move(stub);
   g_current_endpoint = tokens[1];
   refresh_state_after_device_change();
   std::cout << "Connected to " << tokens[1] << "\n";
@@ -1122,7 +1202,7 @@ auto do_show(const std::vector<std::string>& tokens) -> bool {
   return true;
 }
 
-auto do_readout(const std::vector<std::string>& tokens) -> bool {
+auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() != 3) {
     do_help({"help", "readout"});
     return false;
@@ -1243,6 +1323,9 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     ::superhero::StartDataStreamRequest req;
     ::superhero::StartDataStreamReply rep;
     ::grpc::ClientContext context;
+    // A background readout must not make `readout stop` or shell exit wait
+    // forever if the server becomes unresponsive before the stream starts.
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(10));
     const auto status = g_stub->StartDataStream(&context, req, &rep);
     log_grpc_error("StartDataStream", status);
     if (!status.ok()) {
@@ -1318,6 +1401,7 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
             std::lock_guard<std::mutex> lock(frame_counter_mutex);
             frame_counters[logical_address] += 1;
           }
+          increment_readout_frame_count(logical_address);
           break;
         }
         case superhero::DataStreamType::DataStreamType_HKData: {
@@ -1339,7 +1423,8 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
           continue;
         }
       }
-      if (g_interrupted.load(std::memory_order_relaxed)) {
+      if (g_readout_stop_requested.load(std::memory_order_relaxed) ||
+          g_interrupted.load(std::memory_order_relaxed)) {
         break;
       }
     }
@@ -1354,9 +1439,12 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
 
   // Progress display runs on the main thread; it owns the shutdown sequence.
   auto start_time = std::chrono::steady_clock::now();
+  mark_readout_started();
   while (std::chrono::steady_clock::now() - start_time < duration) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
-    if (shell::stdout_is_tty()) {
+    // Interactive readout is a background job; emitting a carriage-return
+    // progress line there would overwrite the user's current readline input.
+    if (shell::stdout_is_tty() && !g_interactive_shell) {
       std::map<uint8_t, size_t> counters_snapshot;
       {
         std::lock_guard<std::mutex> lock(frame_counter_mutex);
@@ -1380,16 +1468,21 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
                 << std::setfill('0') << std::setw(2) << minutes << ":" << std::setfill('0')
                 << std::setw(2) << seconds << "  " << std::flush;
     }
-    if (g_interrupted.load(std::memory_order_relaxed)) {
-      std::cout << "\nReadout interrupted by SIGINT\n";
+    if (g_readout_stop_requested.load(std::memory_order_relaxed) ||
+        g_interrupted.load(std::memory_order_relaxed)) {
+      if (!g_interactive_shell) {
+        std::cout << "\nReadout stop requested\n";
+      }
       break;
     }
     if (reader_done.load(std::memory_order_relaxed)) {
-      std::cout << "\nData stream closed by server\n";
+      if (!g_interactive_shell) {
+        std::cout << "\nData stream closed by server\n";
+      }
       break;
     }
   }
-  if (shell::stdout_is_tty()) {
+  if (shell::stdout_is_tty() && !g_interactive_shell) {
     std::cout << "\n";
   }
   // Acquisition time only — measured before the stop/cancel sequence.
@@ -1427,8 +1520,10 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
   stream_context.TryCancel();
   readout_thread.join();
 
-  // Final summary: the durable record of the acquisition for batch logs.
-  {
+  // Final summary: the durable record of foreground/script acquisitions.
+  // Interactive readout keeps this data for `readout status` instead, so a
+  // background worker never writes over a readline prompt at completion.
+  if (!g_interactive_shell) {
     size_t total_frames = 0;
     for (const auto& [addr, count] : frame_counters) {
       total_frames += count;
@@ -1442,11 +1537,120 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     std::cout << "  HK -> " << hk_filename << "\n";
   }
 
-  if (g_interrupted.load(std::memory_order_relaxed)) {
-    g_interrupted.store(false, std::memory_order_relaxed);
+  if (g_readout_stop_requested.load(std::memory_order_relaxed) ||
+      g_interrupted.load(std::memory_order_relaxed)) {
     return false;
   }
   return stop_ok && !readout_failed.load(std::memory_order_relaxed);
+}
+
+namespace {
+
+std::mutex g_readout_mutex;
+std::thread g_readout_worker;
+
+void join_completed_readout_locked() {
+  if (!g_readout_active.load(std::memory_order_relaxed) && g_readout_worker.joinable()) {
+    g_readout_worker.join();
+  }
+}
+
+}  // namespace
+
+auto do_readout(const std::vector<std::string>& tokens) -> bool {
+  if (tokens.size() == 2 && tokens[1] == "status") {
+    const auto status = readout_status_snapshot();
+    const bool active = g_readout_active.load(std::memory_order_relaxed);
+    size_t total_frames = 0;
+    for (const auto& [_, count] : status.frame_counters) {
+      total_frames += count;
+    }
+    if (!active) {
+      std::cout << "Readout is not running.";
+      if (status.has_result) {
+        std::cout << " Last readout "
+                  << (status.succeeded ? "completed." : "ended with an error or stop request.");
+      }
+      std::cout << "\n";
+    } else if (!status.started) {
+      std::cout << "Readout is starting.\n";
+    } else {
+      const auto elapsed = std::chrono::steady_clock::now() - status.start_time;
+      const auto remaining = elapsed < status.duration ? status.duration - elapsed
+                                                        : std::chrono::nanoseconds::zero();
+      std::cout << "Readout is "
+                << (g_readout_stop_requested.load(std::memory_order_relaxed) ? "stopping" : "running")
+                << ": " << total_frames << " frames | elapsed " << format_elapsed_time(elapsed)
+                << " | remaining " << format_elapsed_time(remaining) << "\n";
+    }
+    for (const auto& [addr, count] : status.frame_counters) {
+      std::cout << "  " << shell::to_hex_string(addr) << ": " << count << " frames\n";
+    }
+    return true;
+  }
+  if (tokens.size() == 2 && tokens[1] == "stop") {
+    if (!g_readout_active.load(std::memory_order_relaxed)) {
+      std::cout << "No readout is running.\n";
+      return false;
+    }
+    g_readout_stop_requested.store(true, std::memory_order_relaxed);
+    std::cout << "Readout stop requested.\n";
+    return true;
+  }
+
+  if (!g_interactive_shell) {
+    return do_readout_foreground(tokens);
+  }
+  if (tokens.size() != 3) {
+    do_help({"help", "readout"});
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lock(g_readout_mutex);
+  if (g_readout_active.load(std::memory_order_relaxed)) {
+    std::cout << "A readout is already running. Use 'readout status' or 'readout stop'.\n";
+    return false;
+  }
+  join_completed_readout_locked();
+  std::chrono::nanoseconds duration;
+  try {
+    duration = shell::parse_duration(tokens[1]);
+  } catch (const std::exception& e) {
+    std::cout << "Error parsing duration: " << e.what() << "\n";
+    return false;
+  }
+  // Validate the connection on the shell thread. Besides returning a useful
+  // immediate error, this keeps a failed launch from writing asynchronously
+  // while readline is displaying the next prompt.
+  if (!ensure_grpc_initialized()) {
+    return false;
+  }
+  reset_readout_status(duration);
+  g_readout_stop_requested.store(false, std::memory_order_relaxed);
+  g_readout_active.store(true, std::memory_order_relaxed);
+  g_readout_worker = std::thread([tokens]() {
+    const bool success = do_readout_foreground(tokens);
+    finish_readout_status(success, g_readout_stop_requested.load(std::memory_order_relaxed));
+    g_readout_active.store(false, std::memory_order_relaxed);
+  });
+  std::cout << "Readout started in the background. Use 'readout status' or 'readout stop'.\n";
+  return true;
+}
+
+void shutdown_readout() {
+  std::thread worker;
+  {
+    std::lock_guard<std::mutex> lock(g_readout_mutex);
+    if (!g_readout_worker.joinable()) {
+      return;
+    }
+    if (g_readout_active.load(std::memory_order_relaxed)) {
+      std::cout << "Stopping active readout before exit...\n";
+      g_readout_stop_requested.store(true, std::memory_order_relaxed);
+    }
+    worker = std::move(g_readout_worker);
+  }
+  worker.join();
 }
 
 auto do_set_hv([[maybe_unused]] const std::vector<std::string>& tokens) -> bool {
