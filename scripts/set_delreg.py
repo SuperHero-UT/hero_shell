@@ -28,9 +28,13 @@ def main() -> int:
     asics = [register.asic0, register.asic1, register.asic2, register.asic3]
     for asic_index, asic in enumerate(asics):
         pedestals = values[asic_index * 64 : (asic_index + 1) * 64]
-        highest = max(pedestals)
-        for channel, pedestal in enumerate(pedestals):
-            asic.Del_reg[channel] = max(0, min(63, round(highest - pedestal)))
+        untrimmed = [
+            pedestal + asic.Del_reg[channel]
+            for channel, pedestal in enumerate(pedestals)
+        ]
+        lowest = min(untrimmed)
+        for channel, pedestal in enumerate(untrimmed):
+            asic.Del_reg[channel] = max(0, min(63, round(pedestal - lowest)))
 
     register.save(args.config_out)
     print(f"Pedestal register written to {args.config_out}", file=sys.stderr)

@@ -438,9 +438,13 @@ and `Ctrl-C` aborts that command.
 
 ```text
 pedcalib_readout <duration> <output_file_prefix> <register_output>
+pedcalib_readout status
+pedcalib_readout stop
 ```
 
-Acquires pedestal data in the foreground from exactly one registered detector. Before acquisition,
+Acquires pedestal data from exactly one registered detector. In an interactive shell it runs in the
+background and uses the same status, stop, frame counters, `log.txt` entry, and prompt countdown as
+`readout`. Status also shows the register output path and calibration messages. Before acquisition,
 the command verifies that the sibling or `PATH`-visible `calc_pedestal` binary can run, that Python
 can load the bundled `vareg.py`, and that `set_vareg` has successfully loaded a readable VAREG file.
 
@@ -448,8 +452,9 @@ After the normal raw and HK files are closed, it runs `calc_pedestal` directly o
 The small C++ program only uses `FrameAnalyzer` to emit each channel's median `ADC-CMN`. It uses
 at most the first 8192 valid events and ignores later events; the median is calculated with
 `std::nth_element`. Its output is piped to `set_delreg.py`, which uses `vareg.py` to set
-`Del_reg` to the difference from that ASIC's highest pedestal (clamped to `0..63`) and writes a
-CRC-correct VAREG image to `<register_output>`.
+`Del_reg` as the amount subtracted from each channel's ADC value. It first adds the current
+`Del_reg` back to each measured pedestal, then subtracts the lowest reconstructed pedestal in that
+ASIC (clamped to `0..63`) and writes a CRC-correct VAREG image to `<register_output>`.
 
 Example:
 
@@ -496,7 +501,7 @@ Tab completion is state-aware for command names and includes:
 - `[all]` for the device argument of `set` and `get`.
 - FPGA configuration keys, completing as `key=`.
 - Link-speed values.
-- `status` and `stop` for `readout`.
+- `status` and `stop` for `readout` and `pedcalib_readout`.
 - Filenames for `set_vareg`, `readout`, and `@script`.
 
 History is loaded from and written to `.hero_shell_history`, with the in-memory history limited to 1000 entries.
