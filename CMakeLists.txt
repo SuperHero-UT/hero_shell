@@ -203,14 +203,20 @@ target_include_directories(
   calc_pedestal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                         ${CMAKE_CURRENT_SOURCE_DIR}/include/raw2root)
 
+set(HERO_SHELL_SCRIPT_OUTPUTS)
 foreach(_script IN ITEMS vareg.py set_delreg.py)
+  set(_script_source "${CMAKE_CURRENT_SOURCE_DIR}/scripts/${_script}")
+  set(_script_output "${CMAKE_CURRENT_BINARY_DIR}/${_script}")
   add_custom_command(
-    TARGET hero_shell
-    POST_BUILD
+    OUTPUT "${_script_output}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/${_script}"
-            "$<TARGET_FILE_DIR:hero_shell>/${_script}")
+            "${_script_source}" "${_script_output}"
+    DEPENDS "${_script_source}"
+    VERBATIM)
+  list(APPEND HERO_SHELL_SCRIPT_OUTPUTS "${_script_output}")
 endforeach()
+add_custom_target(hero_shell_scripts ALL DEPENDS ${HERO_SHELL_SCRIPT_OUTPUTS})
+add_dependencies(hero_shell hero_shell_scripts)
 
 install(TARGETS hero_shell raw2root calc_pedestal RUNTIME DESTINATION bin)
 install(PROGRAMS scripts/vareg.py scripts/set_delreg.py TYPE BIN)
