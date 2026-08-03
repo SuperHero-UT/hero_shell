@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -24,6 +25,7 @@ extern std::atomic<bool> g_interrupted;
 extern std::atomic<bool> g_readout_active;
 extern std::atomic<bool> g_readout_stop_requested;
 extern bool g_interactive_shell;
+extern std::thread::id g_shell_thread_id;
 extern std::shared_ptr<grpc::Channel> g_channel;
 extern std::unique_ptr<superhero::CommunicationService::Stub> g_stub;
 extern ShellState g_current_state;

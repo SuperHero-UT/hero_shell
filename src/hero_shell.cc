@@ -1,8 +1,10 @@
 #include <grpcpp/client_context.h>
 #include <editline/readline.h>
 #include <superhero.grpc.pb.h>
+#include <poll.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
@@ -10,7 +12,9 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "commands.hh"
@@ -22,6 +26,7 @@ std::atomic<bool> g_interrupted{false};
 std::atomic<bool> g_readout_active{false};
 std::atomic<bool> g_readout_stop_requested{false};
 bool g_interactive_shell = false;
+std::thread::id g_shell_thread_id{};
 std::shared_ptr<grpc::Channel> g_channel = nullptr;
 std::unique_ptr<superhero::CommunicationService::Stub> g_stub = nullptr;
 ShellState g_current_state = ShellState::IDLE;
@@ -34,6 +39,14 @@ const std::vector<ShellState> kAllStates = {ShellState::IDLE, ShellState::CONNEC
                                             ShellState::DEVICE_ADDED};
 const std::vector<ShellState> kConnectedStates = {ShellState::CONNECTED, ShellState::DEVICE_ADDED};
 const std::vector<ShellState> kDeviceStates = {ShellState::DEVICE_ADDED};
+const std::vector<std::string> kReadoutSafeCommands = {
+    "help", "sleep", "get", "show", "list_devices", "list_detectors", "list_routers",
+    "readout", "exit", "quit"};
+
+auto command_safe_during_readout(const std::string& name) -> bool {
+  return std::find(kReadoutSafeCommands.begin(), kReadoutSafeCommands.end(), name) !=
+         kReadoutSafeCommands.end();
+}
 }  // namespace
 
 const std::vector<CommandInfo> kCommands = {
@@ -42,10 +55,9 @@ const std::vector<CommandInfo> kCommands = {
   Show the list of available commands, or details for one command.
   Typical workflow:
     1. connect <host:port> to open the gRPC channel to CdTeDE.
-    2. add_detector <logical> then answer target/reply prompts so HL knows the detector path.
-    3. (Optional) get_hv / set_hv <logical> <raw> to inspect or ramp the HV DAC.
-    4. set <parameter> <logical> <value> to configure the detector parameters.
-    5. readout <duration> <file.bin> to start/stop HL data streaming and capture frames.
+    2. add_detector <logical> <target...> - <reply...> to register the detector path.
+    3. set <parameter> <logical> <value> to configure detector parameters.
+    4. readout <duration> <output_prefix> to capture frames.
   A line starting with '@' runs a script file: @myscript.txt
   Example: help set)"},
     {"sleep", "General", kAllStates, "Pause the shell for a duration",
@@ -112,11 +124,6 @@ const std::vector<CommandInfo> kCommands = {
      R"(Usage: set_linkspeed <10MHz|20MHz|25MHz|33MHz|50MHz|100MHz>
   Change the SpaceWire link speed.
   Example: set_linkspeed 50MHz)"},
-    {"set_hv", "Configuration", kDeviceStates, "Ramp the HV DAC",
-     "Usage: set_hv <logical> <raw>\n  Ramp the HV DAC. (Not implemented yet.)"},
-    {"get_hv", "Configuration", kDeviceStates, "Inspect the HV DAC",
-     "Usage: get_hv <logical>\n  Inspect the HV DAC. (Not implemented yet.)"},
-
     {"show", "Data Acquisition", kDeviceStates, "Dump status/timing registers",
      "Usage: show <logical>\n  Dump the common status/timing registers for a device."},
     {"readout", "Data Acquisition", kDeviceStates, "Start/stop HL data streaming",
@@ -126,7 +133,8 @@ const std::vector<CommandInfo> kCommands = {
   Start HL data streaming for <duration>, writing per-detector and HK files.
   In an interactive shell, readout runs in the background so `get`, `show`, and
   device-list commands remain available. Use `readout status` to inspect it or
-  `readout stop` to stop it early. Status shows frame counts and elapsed/remaining time.
+  `readout stop` to stop it early. Status shows output paths, frame counts,
+  elapsed/remaining time, and deferred worker diagnostics.
   <duration> accepts combined units, e.g. 10s, 90min, 1h30min.
   Example: readout 1h30min run001)"},
 };
@@ -141,7 +149,11 @@ auto find_command(const std::string& name) -> const CommandInfo* {
 }
 
 auto command_available(const CommandInfo& info) -> bool {
-  return std::find(info.states.begin(), info.states.end(), g_current_state) != info.states.end();
+  const bool available_in_state =
+      std::find(info.states.begin(), info.states.end(), g_current_state) != info.states.end();
+  return available_in_state &&
+         (!g_readout_active.load(std::memory_order_relaxed) ||
+          command_safe_during_readout(info.name));
 }
 
 namespace {
@@ -150,6 +162,18 @@ constexpr const char* kHistoryFile = ".hero_shell_history";
 // True once run_shell has loaded the history; guards against clobbering the
 // history file with an empty list when `exit` runs in argv-script mode.
 bool g_history_loaded = false;
+
+struct CallbackReadlineState {
+  char* line = nullptr;
+  bool complete = false;
+};
+
+CallbackReadlineState* g_callback_readline_state = nullptr;
+
+void capture_callback_line(char* line) {
+  g_callback_readline_state->line = line;
+  g_callback_readline_state->complete = true;
+}
 
 void handle_sigint(int) {
   g_interrupted.store(true, std::memory_order_relaxed);
@@ -190,12 +214,52 @@ auto consume_line_continuation(std::string& line) -> bool {
   return true;
 }
 
+auto readline_with_live_prompt(const PromptInfo& initial_prompt) -> char* {
+  CallbackReadlineState state;
+  g_callback_readline_state = &state;
+  std::string current_prompt = initial_prompt.readline_text;
+  rl_callback_handler_install(current_prompt.c_str(), capture_callback_line);
+
+  while (!state.complete) {
+    pollfd input{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const int poll_result = poll(&input, 1, 100);
+    if (poll_result > 0 && (input.revents & (POLLIN | POLLHUP)) != 0) {
+      rl_callback_read_char();
+    } else if (poll_result < 0 && errno != EINTR) {
+      break;
+    }
+
+    if (g_interrupted.load(std::memory_order_relaxed)) {
+      break;
+    }
+
+    const auto refreshed_prompt = build_prompt();
+    if (refreshed_prompt.readline_text != current_prompt) {
+      current_prompt = refreshed_prompt.readline_text;
+      rl_set_prompt(current_prompt.c_str());
+      std::cout << "\r\033[2K" << std::flush;
+      rl_forced_update_display();
+    }
+  }
+
+  rl_callback_handler_remove();
+  g_callback_readline_state = nullptr;
+  return state.line;
+}
+
 }  // namespace
 
 void log_grpc_error(const std::string& api, const grpc::Status& status) {
   if (!status.ok()) {
-    std::cout << "[" << api << "] RPC failed: " << status.error_message()
-              << " (code=" << status.error_code() << ")\n";
+    std::ostringstream message;
+    message << "[" << api << "] RPC failed: " << status.error_message()
+            << " (code=" << status.error_code() << ")";
+    if (g_interactive_shell && g_readout_active.load(std::memory_order_relaxed) &&
+        std::this_thread::get_id() != g_shell_thread_id) {
+      emit_readout_message(message.str(), true);
+    } else {
+      std::cout << message.str() << "\n";
+    }
   }
 }
 
@@ -210,8 +274,10 @@ auto to_uint8_addresses(const std::string& api, const RepeatedField& raw_address
   std::vector<uint8_t> addresses;
   for (const auto& addr : raw_addresses) {
     if (static_cast<uint32_t>(addr) > 0xFFu) {
-      std::cerr << "[" << api << "] Ignoring out-of-range logical address " << addr
-                << " (must fit in one byte)\n";
+      std::ostringstream message;
+      message << "[" << api << "] Ignoring out-of-range logical address " << addr
+              << " (must fit in one byte)";
+      emit_readout_message(message.str(), true);
       continue;
     }
     addresses.push_back(static_cast<uint8_t>(addr));
@@ -327,9 +393,12 @@ auto build_prompt() -> PromptInfo {
     return prompt;
   }
 
+  const auto readout_progress = readout_prompt_progress();
+  const std::string progress_suffix =
+      readout_progress ? "[" + *readout_progress + "]" : std::string();
   std::string plain_prompt = "hero_shell[" + g_current_endpoint + "(" +
                              std::to_string(g_router_count) + "," +
-                             std::to_string(g_detector_count) + ")]> ";
+                             std::to_string(g_detector_count) + ")]" + progress_suffix + "> ";
   prompt.visible_length = plain_prompt.size();
   if (!shell::stdout_is_tty()) {
     prompt.display_text = plain_prompt;
@@ -339,11 +408,12 @@ auto build_prompt() -> PromptInfo {
   prompt.display_text = bold_on_display + "hero_shell[" + g_current_endpoint + "(" +
                         router_color_display + std::to_string(g_router_count) + bold_off_display +
                         "," + detector_color_display + std::to_string(g_detector_count) +
-                        bold_off_display + ")]> ";
+                        bold_off_display + ")]" + progress_suffix + "> ";
   prompt.readline_text = bold_on_readline + "hero_shell[" + g_current_endpoint + "(" +
                          router_color_readline + std::to_string(g_router_count) +
                          bold_off_readline + "," + detector_color_readline +
-                         std::to_string(g_detector_count) + bold_off_readline + ")]> ";
+                         std::to_string(g_detector_count) + bold_off_readline + ")]" +
+                         progress_suffix + "> ";
   return prompt;
 }
 
@@ -410,11 +480,7 @@ auto execute_command(const std::string& line, int depth) -> bool {
     return true;
   }
   if (g_readout_active.load(std::memory_order_relaxed)) {
-    static const std::vector<std::string> kReadoutSafeCommands = {
-        "help", "sleep", "get", "show", "list_devices", "list_detectors", "list_routers",
-        "readout", "exit", "quit"};
-    if (std::find(kReadoutSafeCommands.begin(), kReadoutSafeCommands.end(), tokens[0]) ==
-        kReadoutSafeCommands.end()) {
+    if (!command_safe_during_readout(tokens[0])) {
       std::cout << "Command '" << tokens[0]
                 << "' is unavailable during readout. Only read-only commands and "
                    "'readout status/stop' are allowed.\n";
@@ -482,12 +548,6 @@ auto execute_command(const std::string& line, int depth) -> bool {
   if (tokens[0] == "set_linkspeed") {
     return do_set_linkspeed(tokens);
   }
-  // if (tokens[0] == "set_hv") {
-  //   return do_set_hv(tokens);
-  // }
-  // if (tokens[0] == "get_hv") {
-  //   return do_get_hv(tokens);
-  // }
   if (tokens[0][0] == '#') {
     return true;
   }
@@ -509,6 +569,7 @@ auto execute_command(const std::string& line, int depth) -> bool {
 }
 
 auto run_shell() -> int {
+  g_shell_thread_id = std::this_thread::get_id();
   g_interactive_shell = true;
   rl_catch_signals = 0;
 
@@ -532,7 +593,9 @@ auto run_shell() -> int {
         (prompt.visible_length > 2 ? std::string(prompt.visible_length - 2, ' ') : std::string()) +
         "> ";
 
-    char* raw_input = readline(main_prompt.c_str());
+    char* raw_input = g_readout_active.load(std::memory_order_relaxed)
+                          ? readline_with_live_prompt(prompt)
+                          : readline(main_prompt.c_str());
     shell::defer free_input([raw_input]() -> void {
       if (raw_input) {
         free(raw_input);
