@@ -48,7 +48,7 @@ required gRPC connection or devices are absent.
 | All states | `help`, `sleep`, `exit`, `quit` |
 | `IDLE` | `connect` |
 | `CONNECTED`, `DEVICE_ADDED` | `add_detector`, `remove_detector`, `add_router`, `remove_router`, `remove_device`, `remove_all_devices`, `set_linkspeed` |
-| `DEVICE_ADDED` | `list_devices`, `list_detectors`, `list_routers`, `set`, `get`, `configure_fpga`, `set_vareg`, `show`, `readout` |
+| `DEVICE_ADDED` | `list_devices`, `list_detectors`, `list_routers`, `set`, `get`, `configure_fpga`, `set_vareg`, `show`, `readout`, `pedcalib_readout` |
 
 ## General Commands
 
@@ -433,6 +433,29 @@ Data frames must be 32,768 bytes and HK frames must be 1,024 bytes; malformed or
 In interactive mode, `Ctrl-C` both cancels the current input and requests shutdown of an active
 readout. Check `readout status` for its final result. In script mode, readout remains foreground
 and `Ctrl-C` aborts that command.
+
+### `pedcalib_readout`
+
+```text
+pedcalib_readout <duration> <output_file_prefix> <register_output>
+```
+
+Acquires pedestal data in the foreground from exactly one registered detector. Before acquisition,
+the command verifies that the sibling or `PATH`-visible `calc_pedestal` binary can run, that Python
+can load the bundled `vareg.py`, and that `set_vareg` has successfully loaded a readable VAREG file.
+
+After the normal raw and HK files are closed, it runs `calc_pedestal` directly on the raw file.
+The small C++ program only uses `FrameAnalyzer` to emit each channel's median `ADC-CMN`. It uses
+at most the first 8192 valid events and ignores later events; the median is calculated with
+`std::nth_element`. Its output is piped to `set_delreg.py`, which uses `vareg.py` to set
+`Del_reg` to the difference from that ASIC's highest pedestal (clamped to `0..63`) and writes a
+CRC-correct VAREG image to `<register_output>`.
+
+Example:
+
+```text
+pedcalib_readout 100sec output reg_output
+```
 
 ## Scripting
 

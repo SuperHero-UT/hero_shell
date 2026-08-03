@@ -137,6 +137,14 @@ const std::vector<CommandInfo> kCommands = {
   elapsed/remaining time, and deferred worker diagnostics.
   <duration> accepts combined units, e.g. 10s, 90min, 1h30min.
   Example: readout 1h30min run001)"},
+    {"pedcalib_readout", "Data Acquisition", kDeviceStates,
+     "Acquire pedestal data and generate a calibrated VAREG image",
+     R"(Usage: pedcalib_readout <duration> <output_file_prefix> <register_output>
+  Acquire pedestal data from exactly one detector, calculate per-channel
+  median ADC-CMN pedestals, and write a copy of the last
+  accepted VAREG image with calibrated Del_reg values.
+  Requires calc_pedestal and a Python environment for vareg.py.
+  Example: pedcalib_readout 100sec output reg_output)"},
 };
 
 auto find_command(const std::string& name) -> const CommandInfo* {
@@ -544,6 +552,9 @@ auto execute_command(const std::string& line, int depth) -> bool {
   }
   if (tokens[0] == "readout") {
     return do_readout(tokens);
+  }
+  if (tokens[0] == "pedcalib_readout") {
+    return do_pedcalib_readout(tokens);
   }
   if (tokens[0] == "set_linkspeed") {
     return do_set_linkspeed(tokens);

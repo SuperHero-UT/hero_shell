@@ -17,6 +17,8 @@
 - CMake 3.15+
 - C++17 compatible compiler
 - make (used by bundled ncurses/libedit builds)
+- ROOT (for the separately built `raw2root` converter)
+- Python 3.12+ (for `vareg.py` and `set_delreg.py`)
 
 ### Steps
 
@@ -27,7 +29,7 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
-The binary will be generated at `build/hero_shell`.
+The build generates `build/hero_shell`, `build/raw2root`, and `build/calc_pedestal`.
 
 ## Quick Start
 
@@ -105,6 +107,7 @@ For detailed command syntax and behavior, please refer to the [Command Reference
 | | [`set_linkspeed`](docs/COMMANDS.md#set_linkspeed) | Set SpaceWire link speed |
 | **Data Acquisition** | [`show`](docs/COMMANDS.md#show) | Print device status registers |
 | | [`readout`](docs/COMMANDS.md#readout) | Stream and save HL data |
+| | [`pedcalib_readout`](docs/COMMANDS.md#pedcalib_readout) | Acquire pedestal data and generate a calibrated VAREG image |
 
 ## Scripting
 

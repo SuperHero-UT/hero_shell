@@ -172,4 +172,45 @@ if(UNIX AND NOT APPLE)
   target_link_options(hero_shell PRIVATE -static)
 endif()
 
-install(TARGETS hero_shell RUNTIME DESTINATION bin)
+################################################################################
+# raw2root and pedestal calibration helpers
+################################################################################
+find_program(ROOT_CONFIG_EXECUTABLE NAMES root-config REQUIRED)
+execute_process(
+  COMMAND "${ROOT_CONFIG_EXECUTABLE}" --cflags
+  OUTPUT_VARIABLE ROOT_COMPILE_FLAGS
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(
+  COMMAND "${ROOT_CONFIG_EXECUTABLE}" --libs
+  OUTPUT_VARIABLE ROOT_LINK_FLAGS
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  COMMAND_ERROR_IS_FATAL ANY)
+separate_arguments(ROOT_COMPILE_FLAGS NATIVE_COMMAND "${ROOT_COMPILE_FLAGS}")
+separate_arguments(ROOT_LINK_FLAGS NATIVE_COMMAND "${ROOT_LINK_FLAGS}")
+
+add_executable(raw2root src/raw2root.cc)
+target_compile_features(raw2root PRIVATE cxx_std_17)
+target_compile_options(raw2root PRIVATE ${ROOT_COMPILE_FLAGS})
+target_include_directories(
+  raw2root PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                   ${CMAKE_CURRENT_SOURCE_DIR}/include/raw2root)
+target_link_libraries(raw2root PRIVATE ${ROOT_LINK_FLAGS})
+
+add_executable(calc_pedestal src/calc_pedestal.cc)
+target_compile_features(calc_pedestal PRIVATE cxx_std_17)
+target_include_directories(
+  calc_pedestal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                        ${CMAKE_CURRENT_SOURCE_DIR}/include/raw2root)
+
+foreach(_script IN ITEMS vareg.py set_delreg.py)
+  add_custom_command(
+    TARGET hero_shell
+    POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/${_script}"
+            "$<TARGET_FILE_DIR:hero_shell>/${_script}")
+endforeach()
+
+install(TARGETS hero_shell raw2root calc_pedestal RUNTIME DESTINATION bin)
+install(PROGRAMS scripts/vareg.py scripts/set_delreg.py TYPE BIN)

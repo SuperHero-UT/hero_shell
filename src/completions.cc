@@ -324,6 +324,9 @@ auto repl_completion(const char* text, int start, int end) -> char** {
     if (arg_index_is(2) && command == "readout") {
       return rl_completion_matches(text, rl_filename_completion_function);
     }
+    if ((arg_index_is(2) || arg_index_is(3)) && command == "pedcalib_readout") {
+      return rl_completion_matches(text, rl_filename_completion_function);
+    }
 
     if (arg_index_is(1) && command == "set_linkspeed") {
       return link_speed_completion(text);

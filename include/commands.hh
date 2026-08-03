@@ -22,6 +22,7 @@ auto do_get(const std::vector<std::string>& tokens) -> bool;
 auto do_set_vareg(const std::vector<std::string>& tokens) -> bool;
 auto do_show(const std::vector<std::string>& tokens) -> bool;
 auto do_readout(const std::vector<std::string>& tokens) -> bool;
+auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool;
 auto readout_prompt_progress() -> std::optional<std::string>;
 void emit_readout_message(const std::string& message, bool error = false);
 void shutdown_readout();
