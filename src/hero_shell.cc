@@ -237,6 +237,9 @@ auto readline_with_live_prompt(const PromptInfo& initial_prompt) -> char* {
     const int poll_result = poll(&input, 1, 100);
     if (poll_result > 0 && (input.revents & (POLLIN | POLLHUP)) != 0) {
       rl_callback_read_char();
+      if (state.complete) {
+        break;
+      }
     } else if (poll_result < 0 && errno != EINTR) {
       break;
     }
