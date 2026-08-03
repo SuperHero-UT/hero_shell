@@ -365,6 +365,7 @@ remain available. Use `readout status` to check whether it is active and `readou
 an early stop. Configuration, device-management, connection, and additional readout-start commands
 are rejected while a readout is active; `@script` is rejected as well. `help`, `sleep`, `exit`, and
 `quit` remain available. `exit`/`quit` requests a stop and waits for the readout worker to finish.
+The timestamped data and HK output paths are printed when the background job starts.
 
 `readout status` reports whether the worker is starting, running, stopping, or finished. While it
 is running, it shows the total and per-detector frame counts, output paths, elapsed time, and
@@ -444,9 +445,10 @@ pedcalib_readout stop
 
 Acquires pedestal data from exactly one registered detector. In an interactive shell it runs in the
 background and uses the same status, stop, frame counters, `log.txt` entry, and prompt countdown as
-`readout`. Status also shows the register output path and calibration messages. Before acquisition,
-the command verifies that the sibling or `PATH`-visible `calc_pedestal` binary can run, that Python
-can load the bundled `vareg.py`, and that `set_vareg` has successfully loaded a readable VAREG file.
+`readout`. The timestamped data/HK paths and register output path are printed at startup. Status also
+shows the register output path and calibration messages. Before acquisition, the command verifies
+that the sibling or `PATH`-visible `calc_pedestal` binary can run, that Python can load the bundled
+`vareg.py`, and that `set_vareg` has successfully loaded a readable VAREG file.
 
 After the normal raw and HK files are closed, it runs `calc_pedestal` directly on the raw file.
 The small C++ program only uses `FrameAnalyzer` to emit each channel's median `ADC-CMN`. It uses
