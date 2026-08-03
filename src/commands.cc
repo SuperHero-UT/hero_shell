@@ -1317,10 +1317,16 @@ auto do_show(const std::vector<std::string>& tokens) -> bool {
   return true;
 }
 
-auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
+struct ReadoutSetup {
+  std::chrono::nanoseconds duration;
+  std::chrono::system_clock::time_point acquisition_time;
+  std::vector<uint8_t> detector_addresses;
+};
+
+auto prepare_readout(const std::vector<std::string>& tokens) -> std::optional<ReadoutSetup> {
   if (tokens.size() != 3) {
     do_help({"help", "readout"});
-    return false;
+    return std::nullopt;
   }
 
   std::chrono::nanoseconds duration;
@@ -1328,10 +1334,47 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     duration = shell::parse_duration(tokens[1]);
   } catch (const std::exception& e) {
     emit_readout_message("Error parsing duration: " + std::string(e.what()), true);
-    return false;
+    return std::nullopt;
   }
 
   if (!ensure_grpc_initialized()) {
+    return std::nullopt;
+  }
+
+  auto detector_addresses = get_detector_logical_addresses();
+  if (!detector_addresses.has_value()) {
+    return std::nullopt;
+  }
+  if (detector_addresses->empty()) {
+    emit_readout_message("No detectors registered for readout.", true);
+    return std::nullopt;
+  }
+
+  return ReadoutSetup{duration, std::chrono::system_clock::now(), *detector_addresses};
+}
+
+auto readout_file_prefix(const std::string& output_prefix, const ReadoutSetup& setup)
+    -> std::string {
+  return output_prefix + "_" + format_yyMMdd_hhmmss(setup.acquisition_time);
+}
+
+void print_readout_outputs(const std::string& file_prefix, const ReadoutSetup& setup,
+                           const std::optional<std::string>& register_output = std::nullopt) {
+  for (const auto address : setup.detector_addresses) {
+    std::cout << "  Data " << shell::to_hex_string(address) << ": " << file_prefix << "_"
+              << shell::to_hex_string(address) << "\n";
+  }
+  std::cout << "  HK: " << file_prefix << "_hk\n";
+  if (register_output.has_value()) {
+    std::cout << "  Register: " << *register_output << "\n";
+  }
+}
+
+auto do_readout_foreground(const std::vector<std::string>& tokens,
+                           const std::optional<ReadoutSetup>& prepared_setup = std::nullopt)
+    -> bool {
+  const auto setup = prepared_setup.has_value() ? prepared_setup : prepare_readout(tokens);
+  if (!setup.has_value()) {
     return false;
   }
 
@@ -1341,8 +1384,9 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
 
   std::mutex frame_counter_mutex;
   std::map<uint8_t, size_t> frame_counters;
-  auto acquisition_time = std::chrono::system_clock::now();
-  std::string file_prefix = output_datafileprefix + "_" + format_yyMMdd_hhmmss(acquisition_time);
+  const auto acquisition_time = setup->acquisition_time;
+  const auto duration = setup->duration;
+  const std::string file_prefix = readout_file_prefix(output_datafileprefix, *setup);
 
   const auto acquired_date_value = format_iso8601(acquisition_time);
   std::ostringstream exposure_seconds_stream;
@@ -1366,15 +1410,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
   }
   apply_xattr_to_file(hk_filename, build_xattr_map(std::nullopt));
 
-  auto detector_addresses = get_detector_logical_addresses();
-  if (!detector_addresses.has_value()) {
-    return false;
-  }
-  if (detector_addresses->empty()) {
-    emit_readout_message("No detectors registered for readout.", true);
-    return false;
-  }
-  for (const auto& addr : *detector_addresses) {
+  for (const auto& addr : setup->detector_addresses) {
     std::string datafilename = file_prefix + "_" + shell::to_hex_string(addr);
     output_datafiles[addr] = std::make_unique<std::ofstream>(datafilename, std::ios::binary);
     {
@@ -1387,13 +1423,13 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     }
     apply_xattr_to_file(datafilename, build_xattr_map(addr));
   }
-  set_readout_outputs(file_prefix, hk_filename, *detector_addresses);
+  set_readout_outputs(file_prefix, hk_filename, setup->detector_addresses);
   if (!g_interactive_shell) {
     emit_readout_message("Output data files created with prefix: " + file_prefix);
   }
 
   {
-    std::vector<uint8_t> sorted_addresses = *detector_addresses;
+    std::vector<uint8_t> sorted_addresses = setup->detector_addresses;
     std::sort(sorted_addresses.begin(), sorted_addresses.end());
     std::filesystem::path prefix_path(output_datafileprefix);
     auto parent_dir = prefix_path.parent_path();
@@ -1676,11 +1712,10 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
 }
 
 struct PedcalibSetup {
-  std::chrono::nanoseconds duration;
+  ReadoutSetup readout;
   std::string calc_pedestal;
   std::string set_delreg;
   std::string vareg_input;
-  uint8_t detector_address;
 };
 
 auto prepare_pedcalib(const std::vector<std::string>& tokens) -> std::optional<PedcalibSetup> {
@@ -1704,44 +1739,32 @@ auto prepare_pedcalib(const std::vector<std::string>& tokens) -> std::optional<P
     return std::nullopt;
   }
 
-  std::chrono::nanoseconds duration;
-  try {
-    duration = shell::parse_duration(tokens[1]);
-  } catch (const std::exception& error) {
-    std::cerr << "Error parsing duration: " << error.what() << "\n";
-    return std::nullopt;
-  }
-
   if (g_last_set_vareg_path == "N/A" ||
       !std::filesystem::is_regular_file(g_last_set_vareg_path)) {
     std::cerr << "pedcalib_readout requires a readable VAREG file accepted by set_vareg first.\n";
     return std::nullopt;
   }
-  if (!ensure_grpc_initialized()) {
+  const auto readout = prepare_readout({"readout", tokens[1], tokens[2]});
+  if (!readout.has_value()) {
     return std::nullopt;
   }
-  const auto detector_addresses = get_detector_logical_addresses();
-  if (!detector_addresses.has_value()) {
-    return std::nullopt;
-  }
-  if (detector_addresses->size() != 1) {
+  if (readout->detector_addresses.size() != 1) {
     std::cerr << "pedcalib_readout requires exactly one registered detector.\n";
     return std::nullopt;
   }
 
-  return PedcalibSetup{duration, *calc_pedestal, *set_delreg, g_last_set_vareg_path,
-                       detector_addresses->front()};
+  return PedcalibSetup{*readout, *calc_pedestal, *set_delreg, g_last_set_vareg_path};
 }
 
 auto do_pedcalib_readout_foreground(const std::vector<std::string>& tokens,
                                     const PedcalibSetup& setup) -> bool {
-  if (!do_readout_foreground({"readout", tokens[1], tokens[2]})) {
+  if (!do_readout_foreground({"readout", tokens[1], tokens[2]}, setup.readout)) {
     return false;
   }
 
   const auto status = readout_status_snapshot();
   const std::string raw_file =
-      status.file_prefix + "_" + shell::to_hex_string(setup.detector_address);
+      status.file_prefix + "_" + shell::to_hex_string(setup.readout.detector_addresses.front());
   emit_readout_message("Calculating median pedestals...");
   const std::string command = shell_quote(setup.calc_pedestal) + " " + shell_quote(raw_file) +
                               " 2>/dev/null | python3 " + shell_quote(setup.set_delreg) + " --in " +
@@ -1870,28 +1893,22 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
   join_completed_readout_locked();
-  std::chrono::nanoseconds duration;
-  try {
-    duration = shell::parse_duration(tokens[1]);
-  } catch (const std::exception& e) {
-    std::cout << "Error parsing duration: " << e.what() << "\n";
+  const auto setup = prepare_readout(tokens);
+  if (!setup.has_value()) {
     return false;
   }
-  // Validate the connection on the shell thread. Besides returning a useful
-  // immediate error, this keeps a failed launch from writing asynchronously
-  // while readline is displaying the next prompt.
-  if (!ensure_grpc_initialized()) {
-    return false;
-  }
-  reset_readout_status(duration);
+  const auto file_prefix = readout_file_prefix(tokens[2], *setup);
+  reset_readout_status(setup->duration);
+  set_readout_outputs(file_prefix, file_prefix + "_hk", setup->detector_addresses);
   g_readout_stop_requested.store(false, std::memory_order_relaxed);
   g_readout_active.store(true, std::memory_order_relaxed);
-  g_readout_worker = std::thread([tokens]() {
-    const bool success = do_readout_foreground(tokens);
+  g_readout_worker = std::thread([tokens, setup = *setup]() {
+    const bool success = do_readout_foreground(tokens, setup);
     finish_readout_status(success, g_readout_stop_requested.load(std::memory_order_relaxed));
     g_readout_active.store(false, std::memory_order_relaxed);
   });
   std::cout << "Readout started in the background. Use 'readout status' or 'readout stop'.\n";
+  print_readout_outputs(file_prefix, *setup);
   return true;
 }
 
@@ -1905,7 +1922,7 @@ auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
     if (!setup.has_value()) {
       return false;
     }
-    reset_readout_status(setup->duration, "pedcalib_readout");
+    reset_readout_status(setup->readout.duration, "pedcalib_readout");
     set_readout_register_output(tokens[3]);
     g_readout_stop_requested.store(false, std::memory_order_relaxed);
     const bool success = do_pedcalib_readout_foreground(tokens, *setup);
@@ -1925,7 +1942,9 @@ auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
 
-  reset_readout_status(setup->duration, "pedcalib_readout");
+  const auto file_prefix = readout_file_prefix(tokens[2], setup->readout);
+  reset_readout_status(setup->readout.duration, "pedcalib_readout");
+  set_readout_outputs(file_prefix, file_prefix + "_hk", setup->readout.detector_addresses);
   set_readout_register_output(tokens[3]);
   g_readout_stop_requested.store(false, std::memory_order_relaxed);
   g_readout_active.store(true, std::memory_order_relaxed);
@@ -1936,6 +1955,7 @@ auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
   });
   std::cout << "Pedestal calibration started in the background. Use 'pedcalib_readout status' "
                "or 'pedcalib_readout stop'.\n";
+  print_readout_outputs(file_prefix, setup->readout, tokens[3]);
   return true;
 }
 
