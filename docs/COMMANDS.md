@@ -452,9 +452,10 @@ After the normal raw and HK files are closed, it runs `calc_pedestal` directly o
 The small C++ program only uses `FrameAnalyzer` to emit each channel's median `ADC-CMN`. It uses
 at most the first 8192 valid events and ignores later events; the median is calculated with
 `std::nth_element`. Its output is piped to `set_delreg.py`, which uses `vareg.py` to set
-`Del_reg` as the amount subtracted from each channel's ADC value. It first adds the current
-`Del_reg` back to each measured pedestal, then subtracts the lowest reconstructed pedestal in that
-ASIC (clamped to `0..63`) and writes a CRC-correct VAREG image to `<register_output>`.
+`Del_reg` to align the channels to that ASIC's highest pedestal. Because the measured data already
+includes the current setting, it first subtracts the current `Del_reg` from each median, then sets
+the new value to the difference from the highest reconstructed pedestal (clamped to `0..63`). It
+writes a CRC-correct VAREG image to `<register_output>`.
 
 Example:
 
