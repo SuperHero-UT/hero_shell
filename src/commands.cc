@@ -8,6 +8,11 @@
 #include <superhero.grpc.pb.h>
 #include <superhero.pb.h>
 #include <sys/xattr.h>
+#include <unistd.h>
+
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -292,6 +297,60 @@ auto parse_link_speed_token(std::string token) -> std::optional<superhero::SpwLi
   if (lowered == "33") return superhero::SpwLinkSpeed_33MHz;
   if (lowered == "50") return superhero::SpwLinkSpeed_50MHz;
   if (lowered == "100") return superhero::SpwLinkSpeed_100MHz;
+  return std::nullopt;
+}
+
+auto shell_quote(const std::string& value) -> std::string {
+  std::string quoted = "'";
+  for (const char character : value) {
+    if (character == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted += character;
+    }
+  }
+  quoted += "'";
+  return quoted;
+}
+
+auto executable_directory() -> std::optional<std::filesystem::path> {
+  std::error_code error;
+#if defined(__APPLE__)
+  uint32_t size = 0;
+  (void)_NSGetExecutablePath(nullptr, &size);
+  std::vector<char> path(size);
+  if (_NSGetExecutablePath(path.data(), &size) != 0) {
+    return std::nullopt;
+  }
+  auto executable = std::filesystem::weakly_canonical(path.data(), error);
+#elif defined(__linux__)
+  auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
+#else
+  return std::nullopt;
+#endif
+  if (error) {
+    return std::nullopt;
+  }
+  return executable.parent_path();
+}
+
+auto find_auxiliary_file(const std::string& filename, bool must_be_executable)
+    -> std::optional<std::string> {
+  std::vector<std::filesystem::path> candidates;
+  if (const auto directory = executable_directory(); directory.has_value()) {
+    candidates.push_back(*directory / filename);
+  }
+  candidates.emplace_back(std::filesystem::path("scripts") / filename);
+  for (const auto& candidate : candidates) {
+    if (std::filesystem::is_regular_file(candidate) &&
+        (!must_be_executable || access(candidate.c_str(), X_OK) == 0)) {
+      return candidate.string();
+    }
+  }
+  if (must_be_executable &&
+      std::system(("command -v " + filename + " >/dev/null 2>&1").c_str()) == 0) {
+    return filename;
+  }
   return std::nullopt;
 }
 
@@ -1605,6 +1664,73 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
   return stop_ok && !readout_failed.load(std::memory_order_relaxed);
+}
+
+auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
+  if (tokens.size() != 4) {
+    do_help({"help", "pedcalib_readout"});
+    return false;
+  }
+
+  const auto calc_pedestal = find_auxiliary_file("calc_pedestal", true);
+  const auto set_delreg = find_auxiliary_file("set_delreg.py", false);
+  const bool calc_pedestal_ready =
+      calc_pedestal.has_value() &&
+      std::system((shell_quote(*calc_pedestal) + " --check >/dev/null 2>&1").c_str()) == 0;
+  const bool python_ready =
+      set_delreg.has_value() && std::system("command -v python3 >/dev/null 2>&1") == 0 &&
+      std::system(("python3 " + shell_quote(*set_delreg) + " --check >/dev/null 2>&1").c_str()) ==
+          0;
+  if (!calc_pedestal_ready || !python_ready) {
+    std::cerr << "pedcalib_readout requires an executable calc_pedestal and a Python "
+                 "environment able to run vareg.py. Build/activate them, then retry.\n";
+    return false;
+  }
+
+  std::chrono::nanoseconds duration;
+  try {
+    duration = shell::parse_duration(tokens[1]);
+  } catch (const std::exception& error) {
+    std::cerr << "Error parsing duration: " << error.what() << "\n";
+    return false;
+  }
+
+  if (g_last_set_vareg_path == "N/A" ||
+      !std::filesystem::is_regular_file(g_last_set_vareg_path)) {
+    std::cerr << "pedcalib_readout requires a readable VAREG file accepted by set_vareg first.\n";
+    return false;
+  }
+  if (!ensure_grpc_initialized()) {
+    return false;
+  }
+  const auto detector_addresses = get_detector_logical_addresses();
+  if (!detector_addresses.has_value()) {
+    return false;
+  }
+  if (detector_addresses->size() != 1) {
+    std::cerr << "pedcalib_readout requires exactly one registered detector.\n";
+    return false;
+  }
+
+  reset_readout_status(duration);
+  g_readout_stop_requested.store(false, std::memory_order_relaxed);
+  if (!do_readout_foreground({"readout", tokens[1], tokens[2]})) {
+    return false;
+  }
+
+  const auto status = readout_status_snapshot();
+  const std::string raw_file =
+      status.file_prefix + "_" + shell::to_hex_string(detector_addresses->front());
+  std::cout << "Calculating median pedestals...\n";
+  const std::string command = shell_quote(*calc_pedestal) + " " + shell_quote(raw_file) +
+                              " | python3 " + shell_quote(*set_delreg) + " --in " +
+                              shell_quote(g_last_set_vareg_path) + " --out " +
+                              shell_quote(tokens[3]);
+  if (std::system(command.c_str()) != 0) {
+    std::cerr << "calc_pedestal failed for " << raw_file << "\n";
+    return false;
+  }
+  return true;
 }
 
 namespace {
