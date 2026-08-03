@@ -32,7 +32,10 @@ Unknown command-line options exit with status `1`.
 
 ## Shell States and Command Availability
 
-The command metadata drives `help` listings and first-word tab completion. Command dispatch itself does not enforce these states; commands may instead fail when their required gRPC connection or devices are absent.
+The command metadata drives `help` listings and first-word tab completion. During an active
+readout, both are further limited to the commands allowed while acquiring. Command dispatch itself
+does not otherwise enforce the connection/device states; commands may instead fail when their
+required gRPC connection or devices are absent.
 
 | State | Meaning |
 |---|---|
@@ -45,9 +48,7 @@ The command metadata drives `help` listings and first-word tab completion. Comma
 | All states | `help`, `sleep`, `exit`, `quit` |
 | `IDLE` | `connect` |
 | `CONNECTED`, `DEVICE_ADDED` | `add_detector`, `remove_detector`, `add_router`, `remove_router`, `remove_device`, `remove_all_devices`, `set_linkspeed` |
-| `DEVICE_ADDED` | `list_devices`, `list_detectors`, `list_routers`, `set`, `get`, `configure_fpga`, `set_vareg`, `set_hv`, `get_hv`, `show`, `readout` |
-
-`set_hv` and `get_hv` are present in the command metadata but are not dispatched; entering either currently reports an unknown command.
+| `DEVICE_ADDED` | `list_devices`, `list_detectors`, `list_routers`, `set`, `get`, `configure_fpga`, `set_vareg`, `show`, `readout` |
 
 ## General Commands
 
@@ -332,22 +333,6 @@ set_linkspeed 50MHz
 
 Input is case-insensitive and also accepts forms such as `50`, `50mbps`, or `50 MHz` only when tokenized as one argument; use the documented forms in scripts.
 
-### `set_hv`
-
-```text
-set_hv <logical> <raw>
-```
-
-Listed as an HV-DAC ramp command, but currently not executable because command dispatch is disabled.
-
-### `get_hv`
-
-```text
-get_hv <logical>
-```
-
-Listed as an HV-DAC inspection command, but currently not executable because command dispatch is disabled.
-
 ## Data Acquisition Commands
 
 ### `show`
@@ -382,10 +367,23 @@ are rejected while a readout is active; `@script` is rejected as well. `help`, `
 `quit` remain available. `exit`/`quit` requests a stop and waits for the readout worker to finish.
 
 `readout status` reports whether the worker is starting, running, stopping, or finished. While it
-is running, it shows the total and per-detector frame counts, elapsed time, and remaining time. On
-completion it reports the final result and final frame counts. `readout stop` is asynchronous: it
+is running, it shows the total and per-detector frame counts, output paths, elapsed time, and
+remaining time. Background diagnostics are queued and shown here instead of being printed over an
+active input prompt. On completion it distinguishes a normal completion, an operator stop, and a
+failure. `readout stop` is asynchronous: it
 requests shutdown. A second `readout <duration> <prefix>` is rejected until the active worker has
 finished.
+
+The interactive prompt keeps its existing endpoint and `(router, detector)` fields and appends a
+live `[remaining/total]` countdown while readout is active:
+
+```text
+hero_shell[localhost:50051(0,1)][00:52.58/01:00.00]>
+```
+
+The countdown updates without replacing the command being edited and disappears when readout
+finishes or is stopped.
+
 If the initial stream-start RPC does not respond within 10 seconds, the readout fails rather than
 leaving the interactive shell unable to stop or exit.
 
@@ -488,12 +486,13 @@ fresh prompt.
 
 When standard output is a TTY, the shell uses ANSI styling in prompts and `help`, and shows live
 countdown/readout progress using carriage-return updates for foreground (scripted) readout. An
-interactive background readout suppresses completion output and the live line so it cannot
-overwrite the command being typed; use `readout status` instead.
+interactive background readout updates only the prompt countdown from the shell thread. Its worker
+does not write directly to the terminal, so startup diagnostics, stream warnings, and completion
+cannot overwrite the command being typed; use `readout status` instead.
 
 When standard output is redirected, styling and live progress are suppressed so output remains suitable for logs. Script prompts are plain when redirected.
 
-Readout always emits a final, durable summary in this format:
+Foreground/script readout emits a final, durable summary in this format:
 
 ```text
 Readout summary: <total_frames> frames in <elapsed_seconds>s

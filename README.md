@@ -42,16 +42,18 @@ hero_shell[localhost:50051(0,0)]> add_detector 0x35 0x02 0x35 - 0x03 0xFE
 hero_shell[localhost:50051(0,1)]> configure_fpga 0x35 peaking_time_nside=10 peaking_time_pside=10 adc_clock_period=8 readout_clock_period=8 readout_clock_delay=2 trig_patlatch_timing=4 reset_wait_time=100 reset_wait_time2=100
 hero_shell[localhost:50051(0,1)]> readout 10s run001
 Readout started in the background. Use 'readout status' or 'readout stop'.
-hero_shell[localhost:50051(0,1)]> show 0x35
+hero_shell[localhost:50051(0,1)][00:09.82/00:10.00]> show 0x35
 ```
 
 The prompt shows the connected endpoint and the registered `(router, detector)` counts.
+During readout it preserves that format and appends a live `[remaining/total]` countdown formatted
+in centiseconds. The countdown disappears when acquisition finishes or is stopped.
 While a readout is active, `get`, `show`, `list_devices`, `list_detectors`, and `list_routers`
-remain available. `readout status` shows total and per-detector frame counts plus elapsed and
-remaining time; use `readout stop` to request an early stop. Commands that change configuration or
-topology are temporarily rejected to protect the acquisition. Exiting the shell requests a stop
-and waits for the readout to finish. Completion is reported by `readout status`, keeping the prompt
-usable while the background worker finishes.
+remain available. `readout status` shows total and per-detector frame counts, output paths,
+elapsed/remaining time, and any deferred worker diagnostics; use `readout stop` to request an
+early stop. Commands that change configuration or topology are temporarily rejected to protect the
+acquisition. Exiting the shell requests a stop and waits for the readout to finish. Completion is
+reported by `readout status`, keeping the prompt usable while the background worker finishes.
 
 ### Batch Script
 
@@ -101,8 +103,6 @@ For detailed command syntax and behavior, please refer to the [Command Reference
 | | [`configure_fpga`](docs/COMMANDS.md#configure_fpga) | Configure FPGA parameters |
 | | [`set_vareg`](docs/COMMANDS.md#set_vareg) | Upload a VAREG image |
 | | [`set_linkspeed`](docs/COMMANDS.md#set_linkspeed) | Set SpaceWire link speed |
-| | [`set_hv`](docs/COMMANDS.md#set_hv) | Set HV-DAC ramp (disabled) |
-| | [`get_hv`](docs/COMMANDS.md#get_hv) | Get HV-DAC status (disabled) |
 | **Data Acquisition** | [`show`](docs/COMMANDS.md#show) | Print device status registers |
 | | [`readout`](docs/COMMANDS.md#readout) | Stream and save HL data |
 

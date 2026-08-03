@@ -86,6 +86,10 @@ struct ReadoutStatus {
   std::chrono::nanoseconds duration{};
   std::chrono::steady_clock::time_point start_time{};
   std::map<uint8_t, size_t> frame_counters;
+  std::vector<std::string> messages;
+  std::string file_prefix;
+  std::string hk_filename;
+  size_t suppressed_message_count = 0;
   bool started = false;
   bool has_result = false;
   bool succeeded = false;
@@ -94,6 +98,7 @@ struct ReadoutStatus {
 
 std::mutex g_readout_status_mutex;
 ReadoutStatus g_readout_status;
+constexpr size_t kMaxReadoutMessages = 20;
 
 void reset_readout_status(std::chrono::nanoseconds duration) {
   std::lock_guard<std::mutex> lock(g_readout_status_mutex);
@@ -105,6 +110,25 @@ void mark_readout_started() {
   std::lock_guard<std::mutex> lock(g_readout_status_mutex);
   g_readout_status.start_time = std::chrono::steady_clock::now();
   g_readout_status.started = true;
+}
+
+void set_readout_outputs(const std::string& file_prefix, const std::string& hk_filename,
+                         const std::vector<uint8_t>& detector_addresses) {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  g_readout_status.file_prefix = file_prefix;
+  g_readout_status.hk_filename = hk_filename;
+  for (const auto address : detector_addresses) {
+    g_readout_status.frame_counters.try_emplace(address, 0);
+  }
+}
+
+void record_readout_message(const std::string& message) {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  if (g_readout_status.messages.size() < kMaxReadoutMessages) {
+    g_readout_status.messages.push_back(message);
+  } else {
+    ++g_readout_status.suppressed_message_count;
+  }
 }
 
 void increment_readout_frame_count(uint8_t logical_address) {
@@ -129,6 +153,16 @@ auto format_elapsed_time(std::chrono::steady_clock::duration elapsed) -> std::st
   std::ostringstream out;
   out << std::setfill('0') << std::setw(2) << seconds / 3600 << ':' << std::setw(2)
       << (seconds % 3600) / 60 << ':' << std::setw(2) << seconds % 60;
+  return out.str();
+}
+
+auto format_prompt_duration(std::chrono::nanoseconds value) -> std::string {
+  value = std::max(value, std::chrono::nanoseconds::zero());
+  const auto centiseconds = std::chrono::ceil<std::chrono::duration<int64_t, std::centi>>(value);
+  const auto count = centiseconds.count();
+  std::ostringstream out;
+  out << std::setfill('0') << std::setw(2) << count / 6000 << ':' << std::setw(2)
+      << (count / 100) % 60 << '.' << std::setw(2) << count % 100;
   return out.str();
 }
 
@@ -232,8 +266,9 @@ void apply_xattr_to_file(const std::string& path,
     const int result = setxattr(path.c_str(), attr_name.c_str(), value.data(), value.size(), 0);
 #endif
     if (result != 0) {
-      std::cerr << "Failed to set xattr '" << attr_name << "' on " << path << ": "
-                << std::strerror(errno) << "\n";
+      emit_readout_message("Failed to set xattr '" + attr_name + "' on " + path + ": " +
+                               std::strerror(errno),
+                           true);
     }
   }
 }
@@ -262,16 +297,28 @@ auto parse_link_speed_token(std::string token) -> std::optional<superhero::SpwLi
 
 }  // namespace
 
+void emit_readout_message(const std::string& message, bool error) {
+  if (g_interactive_shell && std::this_thread::get_id() != g_shell_thread_id) {
+    record_readout_message(message);
+    return;
+  }
+  auto& output = error ? std::cerr : std::cout;
+  output << message << "\n";
+}
+
 auto do_help(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() == 1) {
     std::cout << "Available commands:\n";
     const std::string* current_category = nullptr;
     for (const auto& info : kCommands) {
+      if (!command_available(info)) {
+        continue;
+      }
       if (!current_category || *current_category != info.category) {
         current_category = &info.category;
         std::cout << "\n" << info.category << ":\n";
       }
-      if (command_available(info) && shell::stdout_is_tty()) {
+      if (shell::stdout_is_tty()) {
         std::cout << "  \033[1m" << std::left << std::setw(20) << info.name << "\033[0m"
                   << info.summary << "\n";
       } else {
@@ -1212,7 +1259,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
   try {
     duration = shell::parse_duration(tokens[1]);
   } catch (const std::exception& e) {
-    std::cout << "Error parsing duration: " << e.what() << "\n";
+    emit_readout_message("Error parsing duration: " + std::string(e.what()), true);
     return false;
   }
 
@@ -1246,7 +1293,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
   const std::string hk_filename = file_prefix + "_hk";
   output_hkfile = std::make_unique<std::ofstream>(hk_filename, std::ios::binary);
   if (!output_hkfile->is_open()) {
-    std::cout << "Failed to open output file: " << hk_filename << "\n";
+    emit_readout_message("Failed to open output file: " + hk_filename, true);
     return false;
   }
   apply_xattr_to_file(hk_filename, build_xattr_map(std::nullopt));
@@ -1256,7 +1303,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
   if (detector_addresses->empty()) {
-    std::cout << "No detectors registered for readout.\n";
+    emit_readout_message("No detectors registered for readout.", true);
     return false;
   }
   for (const auto& addr : *detector_addresses) {
@@ -1267,12 +1314,15 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
       frame_counters[addr] = 0;
     }
     if (!output_datafiles[addr]->is_open()) {
-      std::cout << "Failed to open output file: " << datafilename << "\n";
+      emit_readout_message("Failed to open output file: " + datafilename, true);
       return false;
     }
     apply_xattr_to_file(datafilename, build_xattr_map(addr));
   }
-  std::cout << "\tOutput data files created with prefix: " << file_prefix << "\n";
+  set_readout_outputs(file_prefix, hk_filename, *detector_addresses);
+  if (!g_interactive_shell) {
+    emit_readout_message("Output data files created with prefix: " + file_prefix);
+  }
 
   {
     std::vector<uint8_t> sorted_addresses = *detector_addresses;
@@ -1282,7 +1332,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     std::string log_filename = parent_dir.empty() ? "log.txt" : (parent_dir / "log.txt").string();
     std::ofstream readout_log(log_filename, std::ios::app);
     if (!readout_log.is_open()) {
-      std::cout << "Failed to open readout log: " << log_filename << "\n";
+      emit_readout_message("Failed to open readout log: " + log_filename, true);
       return false;
     }
     const std::filesystem::path log_base = parent_dir;
@@ -1293,8 +1343,10 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
         auto data = superhero::grpc::rmapRead(
             *g_stub, addr, ::superhero::CdTeDSDAddress_ForcetrigFlag, 4);
         if (data.size() != 4) {
-          std::cout << "Unexpected ForcetrigFlag size for " << shell::to_hex_string(addr) << ": "
-                    << data.size() << " bytes\n";
+          emit_readout_message("Unexpected ForcetrigFlag size for " +
+                                   shell::to_hex_string(addr) + ": " +
+                                   std::to_string(data.size()) + " bytes",
+                               true);
           return false;
         }
         uint32_t value = (static_cast<uint32_t>(data[0]) << 24) |
@@ -1302,8 +1354,9 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
                          (static_cast<uint32_t>(data[2]) << 8) | static_cast<uint32_t>(data[3]);
         force_flag = value != 0;
       } catch (const std::exception& e) {
-        std::cout << "Failed to read ForcetrigFlag for " << shell::to_hex_string(addr) << ": "
-                  << e.what() << "\n";
+        emit_readout_message("Failed to read ForcetrigFlag for " +
+                                 shell::to_hex_string(addr) + ": " + e.what(),
+                             true);
         return false;
       }
       std::filesystem::path relative_path = datafilename;
@@ -1327,7 +1380,6 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     // forever if the server becomes unresponsive before the stream starts.
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(10));
     const auto status = g_stub->StartDataStream(&context, req, &rep);
-    log_grpc_error("StartDataStream", status);
     if (!status.ok()) {
       throw std::runtime_error("StartDataStream RPC failed: " + status.error_message());
     }
@@ -1336,7 +1388,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     }
     std::this_thread::sleep_for(100ms);
   } catch (const std::exception& e) {
-    std::cout << "Failed to start data stream: " << e.what() << "\n";
+    emit_readout_message("Failed to start data stream: " + std::string(e.what()), true);
     return false;
   }
 
@@ -1357,8 +1409,9 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     while (reader->Read(&rep)) {
       const auto logical_address_raw = static_cast<uint32_t>(rep.logical_address());
       if (logical_address_raw > std::numeric_limits<uint8_t>::max()) {
-        std::cerr << "Received DataStream frame with unsupported logical address "
-                  << shell::to_hex_string(logical_address_raw) << ", dropping frame" << std::endl;
+        emit_readout_message("Received DataStream frame with unsupported logical address " +
+                                 shell::to_hex_string(logical_address_raw) + ", dropping frame",
+                             true);
         continue;
       }
       const auto logical_address = static_cast<uint8_t>(logical_address_raw);
@@ -1367,32 +1420,37 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
         case superhero::DataStreamType::DataStreamType_FrameData: {
           auto data = rep.value();
           if (data.size() != 32768) {
-            std::cerr << "Received DataStream frame with unexpected size: " << data.size()
-                      << ", expected: 32768" << std::endl;
+            emit_readout_message("Received DataStream frame with unexpected size: " +
+                                     std::to_string(data.size()) + ", expected: 32768",
+                                 true);
             continue;
           }
           {
             std::lock_guard<std::mutex> lock(frame_counter_mutex);
             if (frame_counters.find(logical_address) == frame_counters.end()) {
-              std::cerr << "Received data frame for unregistered logical address "
-                        << shell::to_hex_string(logical_address) << ", dropping frame data"
-                        << std::endl;
+              emit_readout_message("Received data frame for unregistered logical address " +
+                                       shell::to_hex_string(logical_address) +
+                                       ", dropping frame data",
+                                   true);
               continue;
             }
           }
           auto datafile_it = output_datafiles.find(logical_address);
           if (datafile_it == output_datafiles.end() || !datafile_it->second ||
               !datafile_it->second->is_open()) {
-            std::cerr << "Output file for logical address " << shell::to_hex_string(logical_address)
-                      << " is not available, dropping frame data" << std::endl;
+            emit_readout_message("Output file for logical address " +
+                                     shell::to_hex_string(logical_address) +
+                                     " is not available, dropping frame data",
+                                 true);
             continue;
           }
           auto raw_data = data.Flatten();
           *(datafile_it->second) << raw_data;
           *(datafile_it->second) << std::flush;
           if (!datafile_it->second->good()) {
-            std::cerr << "Failed to write frame data for logical address "
-                      << shell::to_hex_string(logical_address) << std::endl;
+            emit_readout_message("Failed to write frame data for logical address " +
+                                     shell::to_hex_string(logical_address),
+                                 true);
             readout_failed.store(true, std::memory_order_relaxed);
             continue;
           }
@@ -1407,19 +1465,22 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
         case superhero::DataStreamType::DataStreamType_HKData: {
           auto data = rep.value();
           if (data.size() != 1024) {
-            std::cerr << "Received HK DataStream frame with unexpected size: " << data.size()
-                      << ", expected: 1024" << std::endl;
+            emit_readout_message("Received HK DataStream frame with unexpected size: " +
+                                     std::to_string(data.size()) + ", expected: 1024",
+                                 true);
             continue;
           }
           (*output_hkfile) << data.Flatten() << std::flush;
           if (!output_hkfile->good()) {
-            std::cerr << "Failed to write HK data" << std::endl;
+            emit_readout_message("Failed to write HK data", true);
             readout_failed.store(true, std::memory_order_relaxed);
           }
           break;
         }
         default: {
-          std::cerr << "Received DataStream frame with unknown type: " << rep.type() << std::endl;
+          emit_readout_message("Received DataStream frame with unknown type: " +
+                                   std::to_string(rep.type()),
+                               true);
           continue;
         }
       }
@@ -1429,9 +1490,9 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
       }
     }
     auto finish_status = reader->Finish();
-    log_grpc_error("DataStream", finish_status);
     if (!finish_status.ok() && finish_status.error_code() != ::grpc::StatusCode::CANCELLED) {
-      std::cerr << "DataStream terminated with error: " << finish_status.error_message() << "\n";
+      emit_readout_message("DataStream terminated with error: " + finish_status.error_message(),
+                           true);
       readout_failed.store(true, std::memory_order_relaxed);
     }
     reader_done.store(true, std::memory_order_relaxed);
@@ -1476,9 +1537,11 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
       break;
     }
     if (reader_done.load(std::memory_order_relaxed)) {
-      if (!g_interactive_shell) {
-        std::cout << "\nData stream closed by server\n";
+      if (!g_interactive_shell && shell::stdout_is_tty()) {
+        std::cout << "\n";
       }
+      emit_readout_message("Data stream closed by server before the requested duration.", true);
+      readout_failed.store(true, std::memory_order_relaxed);
       break;
     }
   }
@@ -1498,12 +1561,11 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     // its timeout message instead of a bare DEADLINE_EXCEEDED.
     stop_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(7));
     const auto stop_status = g_stub->StopDataStream(&stop_context, stop_req, &stop_rep);
-    log_grpc_error("StopDataStream", stop_status);
     if (!stop_status.ok()) {
-      std::cerr << "Failed to stop data stream: " << stop_status.error_message() << "\n";
+      emit_readout_message("Failed to stop data stream: " + stop_status.error_message(), true);
       stop_ok = false;
     } else if (!stop_rep.accepted()) {
-      std::cerr << "Failed to stop data stream: " << stop_rep.message() << "\n";
+      emit_readout_message("Failed to stop data stream: " + stop_rep.message(), true);
       stop_ok = false;
     }
   }
@@ -1514,8 +1576,9 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
   // mode (CdTeDE known issue C-2) — warn so the operator can check DE status.
   std::this_thread::sleep_for(1s);
   if (!stop_ok) {
-    std::cerr << "Warning: cancelling data stream without a confirmed stop; "
-                 "the server may remain in observation mode.\n";
+    emit_readout_message("Warning: cancelling data stream without a confirmed stop; "
+                         "the server may remain in observation mode.",
+                         true);
   }
   stream_context.TryCancel();
   readout_thread.join();
@@ -1557,6 +1620,25 @@ void join_completed_readout_locked() {
 
 }  // namespace
 
+auto readout_prompt_progress() -> std::optional<std::string> {
+  if (!g_readout_active.load(std::memory_order_relaxed)) {
+    return std::nullopt;
+  }
+
+  const auto status = readout_status_snapshot();
+  if (status.duration <= std::chrono::nanoseconds::zero()) {
+    return std::nullopt;
+  }
+
+  auto remaining = status.duration;
+  if (status.started) {
+    const auto elapsed = std::chrono::steady_clock::now() - status.start_time;
+    remaining = elapsed < status.duration ? status.duration - elapsed
+                                          : std::chrono::nanoseconds::zero();
+  }
+  return format_prompt_duration(remaining) + "/" + format_prompt_duration(status.duration);
+}
+
 auto do_readout(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() == 2 && tokens[1] == "status") {
     const auto status = readout_status_snapshot();
@@ -1568,8 +1650,13 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     if (!active) {
       std::cout << "Readout is not running.";
       if (status.has_result) {
-        std::cout << " Last readout "
-                  << (status.succeeded ? "completed." : "ended with an error or stop request.");
+        if (status.succeeded) {
+          std::cout << " Last readout completed.";
+        } else if (status.stop_requested) {
+          std::cout << " Last readout was stopped.";
+        } else {
+          std::cout << " Last readout failed.";
+        }
       }
       std::cout << "\n";
     } else if (!status.started) {
@@ -1583,8 +1670,24 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
                 << ": " << total_frames << " frames | elapsed " << format_elapsed_time(elapsed)
                 << " | remaining " << format_elapsed_time(remaining) << "\n";
     }
+    if (!status.file_prefix.empty()) {
+      std::cout << "  Output prefix: " << status.file_prefix << "\n";
+    }
     for (const auto& [addr, count] : status.frame_counters) {
       std::cout << "  " << shell::to_hex_string(addr) << ": " << count << " frames\n";
+    }
+    if (!status.hk_filename.empty()) {
+      std::cout << "  HK: " << status.hk_filename << "\n";
+    }
+    if (!status.messages.empty()) {
+      std::cout << "  Messages:\n";
+      for (const auto& message : status.messages) {
+        std::cout << "    " << message << "\n";
+      }
+    }
+    if (status.suppressed_message_count > 0) {
+      std::cout << "    " << status.suppressed_message_count
+                << " additional messages suppressed\n";
     }
     return true;
   }
@@ -1651,16 +1754,6 @@ void shutdown_readout() {
     worker = std::move(g_readout_worker);
   }
   worker.join();
-}
-
-auto do_set_hv([[maybe_unused]] const std::vector<std::string>& tokens) -> bool {
-  std::cout << "set_hv command not implemented yet.\n";
-  return true;
-}
-
-auto do_get_hv([[maybe_unused]] const std::vector<std::string>& tokens) -> bool {
-  std::cout << "get_hv command not implemented yet.\n";
-  return true;
 }
 
 auto do_set_linkspeed(const std::vector<std::string>& tokens) -> bool {
