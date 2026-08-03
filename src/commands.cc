@@ -92,8 +92,10 @@ struct ReadoutStatus {
   std::chrono::steady_clock::time_point start_time{};
   std::map<uint8_t, size_t> frame_counters;
   std::vector<std::string> messages;
+  std::string job_name = "readout";
   std::string file_prefix;
   std::string hk_filename;
+  std::string register_filename;
   size_t suppressed_message_count = 0;
   bool started = false;
   bool has_result = false;
@@ -105,10 +107,12 @@ std::mutex g_readout_status_mutex;
 ReadoutStatus g_readout_status;
 constexpr size_t kMaxReadoutMessages = 20;
 
-void reset_readout_status(std::chrono::nanoseconds duration) {
+void reset_readout_status(std::chrono::nanoseconds duration,
+                          const std::string& job_name = "readout") {
   std::lock_guard<std::mutex> lock(g_readout_status_mutex);
   g_readout_status = {};
   g_readout_status.duration = duration;
+  g_readout_status.job_name = job_name;
 }
 
 void mark_readout_started() {
@@ -125,6 +129,11 @@ void set_readout_outputs(const std::string& file_prefix, const std::string& hk_f
   for (const auto address : detector_addresses) {
     g_readout_status.frame_counters.try_emplace(address, 0);
   }
+}
+
+void set_readout_register_output(const std::string& register_filename) {
+  std::lock_guard<std::mutex> lock(g_readout_status_mutex);
+  g_readout_status.register_filename = register_filename;
 }
 
 void record_readout_message(const std::string& message) {
@@ -1591,7 +1600,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
     if (g_readout_stop_requested.load(std::memory_order_relaxed) ||
         g_interrupted.load(std::memory_order_relaxed)) {
       if (!g_interactive_shell) {
-        std::cout << "\nReadout stop requested\n";
+        std::cout << "\nAcquisition stop requested\n";
       }
       break;
     }
@@ -1666,10 +1675,18 @@ auto do_readout_foreground(const std::vector<std::string>& tokens) -> bool {
   return stop_ok && !readout_failed.load(std::memory_order_relaxed);
 }
 
-auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
+struct PedcalibSetup {
+  std::chrono::nanoseconds duration;
+  std::string calc_pedestal;
+  std::string set_delreg;
+  std::string vareg_input;
+  uint8_t detector_address;
+};
+
+auto prepare_pedcalib(const std::vector<std::string>& tokens) -> std::optional<PedcalibSetup> {
   if (tokens.size() != 4) {
     do_help({"help", "pedcalib_readout"});
-    return false;
+    return std::nullopt;
   }
 
   const auto calc_pedestal = find_auxiliary_file("calc_pedestal", true);
@@ -1684,7 +1701,7 @@ auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
   if (!calc_pedestal_ready || !python_ready) {
     std::cerr << "pedcalib_readout requires an executable calc_pedestal and a Python "
                  "environment able to run vareg.py. Build/activate them, then retry.\n";
-    return false;
+    return std::nullopt;
   }
 
   std::chrono::nanoseconds duration;
@@ -1692,44 +1709,49 @@ auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
     duration = shell::parse_duration(tokens[1]);
   } catch (const std::exception& error) {
     std::cerr << "Error parsing duration: " << error.what() << "\n";
-    return false;
+    return std::nullopt;
   }
 
   if (g_last_set_vareg_path == "N/A" ||
       !std::filesystem::is_regular_file(g_last_set_vareg_path)) {
     std::cerr << "pedcalib_readout requires a readable VAREG file accepted by set_vareg first.\n";
-    return false;
+    return std::nullopt;
   }
   if (!ensure_grpc_initialized()) {
-    return false;
+    return std::nullopt;
   }
   const auto detector_addresses = get_detector_logical_addresses();
   if (!detector_addresses.has_value()) {
-    return false;
+    return std::nullopt;
   }
   if (detector_addresses->size() != 1) {
     std::cerr << "pedcalib_readout requires exactly one registered detector.\n";
-    return false;
+    return std::nullopt;
   }
 
-  reset_readout_status(duration);
-  g_readout_stop_requested.store(false, std::memory_order_relaxed);
+  return PedcalibSetup{duration, *calc_pedestal, *set_delreg, g_last_set_vareg_path,
+                       detector_addresses->front()};
+}
+
+auto do_pedcalib_readout_foreground(const std::vector<std::string>& tokens,
+                                    const PedcalibSetup& setup) -> bool {
   if (!do_readout_foreground({"readout", tokens[1], tokens[2]})) {
     return false;
   }
 
   const auto status = readout_status_snapshot();
   const std::string raw_file =
-      status.file_prefix + "_" + shell::to_hex_string(detector_addresses->front());
-  std::cout << "Calculating median pedestals...\n";
-  const std::string command = shell_quote(*calc_pedestal) + " " + shell_quote(raw_file) +
-                              " | python3 " + shell_quote(*set_delreg) + " --in " +
-                              shell_quote(g_last_set_vareg_path) + " --out " +
-                              shell_quote(tokens[3]);
+      status.file_prefix + "_" + shell::to_hex_string(setup.detector_address);
+  emit_readout_message("Calculating median pedestals...");
+  const std::string command = shell_quote(setup.calc_pedestal) + " " + shell_quote(raw_file) +
+                              " 2>/dev/null | python3 " + shell_quote(setup.set_delreg) + " --in " +
+                              shell_quote(setup.vareg_input) + " --out " + shell_quote(tokens[3]) +
+                              " >/dev/null 2>&1";
   if (std::system(command.c_str()) != 0) {
-    std::cerr << "calc_pedestal failed for " << raw_file << "\n";
+    emit_readout_message("Pedestal register generation failed for " + raw_file, true);
     return false;
   }
+  emit_readout_message("Pedestal register written to " + tokens[3]);
   return true;
 }
 
@@ -1769,29 +1791,33 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() == 2 && tokens[1] == "status") {
     const auto status = readout_status_snapshot();
     const bool active = g_readout_active.load(std::memory_order_relaxed);
+    const std::string operation =
+        status.job_name == "pedcalib_readout" ? "Pedestal calibration" : "Readout";
+    const std::string operation_lower =
+        status.job_name == "pedcalib_readout" ? "pedestal calibration" : "readout";
     size_t total_frames = 0;
     for (const auto& [_, count] : status.frame_counters) {
       total_frames += count;
     }
     if (!active) {
-      std::cout << "Readout is not running.";
+      std::cout << operation << " is not running.";
       if (status.has_result) {
         if (status.succeeded) {
-          std::cout << " Last readout completed.";
+          std::cout << " Last " << operation_lower << " completed.";
         } else if (status.stop_requested) {
-          std::cout << " Last readout was stopped.";
+          std::cout << " Last " << operation_lower << " was stopped.";
         } else {
-          std::cout << " Last readout failed.";
+          std::cout << " Last " << operation_lower << " failed.";
         }
       }
       std::cout << "\n";
     } else if (!status.started) {
-      std::cout << "Readout is starting.\n";
+      std::cout << operation << " is starting.\n";
     } else {
       const auto elapsed = std::chrono::steady_clock::now() - status.start_time;
       const auto remaining = elapsed < status.duration ? status.duration - elapsed
                                                         : std::chrono::nanoseconds::zero();
-      std::cout << "Readout is "
+      std::cout << operation << " is "
                 << (g_readout_stop_requested.load(std::memory_order_relaxed) ? "stopping" : "running")
                 << ": " << total_frames << " frames | elapsed " << format_elapsed_time(elapsed)
                 << " | remaining " << format_elapsed_time(remaining) << "\n";
@@ -1804,6 +1830,9 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
     }
     if (!status.hk_filename.empty()) {
       std::cout << "  HK: " << status.hk_filename << "\n";
+    }
+    if (!status.register_filename.empty()) {
+      std::cout << "  Register output: " << status.register_filename << "\n";
     }
     if (!status.messages.empty()) {
       std::cout << "  Messages:\n";
@@ -1819,11 +1848,11 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
   }
   if (tokens.size() == 2 && tokens[1] == "stop") {
     if (!g_readout_active.load(std::memory_order_relaxed)) {
-      std::cout << "No readout is running.\n";
+      std::cout << "No acquisition is running.\n";
       return false;
     }
     g_readout_stop_requested.store(true, std::memory_order_relaxed);
-    std::cout << "Readout stop requested.\n";
+    std::cout << "Acquisition stop requested.\n";
     return true;
   }
 
@@ -1837,7 +1866,7 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
 
   std::lock_guard<std::mutex> lock(g_readout_mutex);
   if (g_readout_active.load(std::memory_order_relaxed)) {
-    std::cout << "A readout is already running. Use 'readout status' or 'readout stop'.\n";
+    std::cout << "An acquisition is already running. Use 'readout status' or 'readout stop'.\n";
     return false;
   }
   join_completed_readout_locked();
@@ -1866,6 +1895,50 @@ auto do_readout(const std::vector<std::string>& tokens) -> bool {
   return true;
 }
 
+auto do_pedcalib_readout(const std::vector<std::string>& tokens) -> bool {
+  if (tokens.size() == 2 && (tokens[1] == "status" || tokens[1] == "stop")) {
+    return do_readout({"readout", tokens[1]});
+  }
+
+  if (!g_interactive_shell) {
+    const auto setup = prepare_pedcalib(tokens);
+    if (!setup.has_value()) {
+      return false;
+    }
+    reset_readout_status(setup->duration, "pedcalib_readout");
+    set_readout_register_output(tokens[3]);
+    g_readout_stop_requested.store(false, std::memory_order_relaxed);
+    const bool success = do_pedcalib_readout_foreground(tokens, *setup);
+    finish_readout_status(success, g_readout_stop_requested.load(std::memory_order_relaxed));
+    return success;
+  }
+
+  std::lock_guard<std::mutex> lock(g_readout_mutex);
+  if (g_readout_active.load(std::memory_order_relaxed)) {
+    std::cout << "An acquisition is already running. Use 'pedcalib_readout status' or "
+                 "'pedcalib_readout stop'.\n";
+    return false;
+  }
+  join_completed_readout_locked();
+  const auto setup = prepare_pedcalib(tokens);
+  if (!setup.has_value()) {
+    return false;
+  }
+
+  reset_readout_status(setup->duration, "pedcalib_readout");
+  set_readout_register_output(tokens[3]);
+  g_readout_stop_requested.store(false, std::memory_order_relaxed);
+  g_readout_active.store(true, std::memory_order_relaxed);
+  g_readout_worker = std::thread([tokens, setup = *setup]() {
+    const bool success = do_pedcalib_readout_foreground(tokens, setup);
+    finish_readout_status(success, g_readout_stop_requested.load(std::memory_order_relaxed));
+    g_readout_active.store(false, std::memory_order_relaxed);
+  });
+  std::cout << "Pedestal calibration started in the background. Use 'pedcalib_readout status' "
+               "or 'pedcalib_readout stop'.\n";
+  return true;
+}
+
 void shutdown_readout() {
   std::thread worker;
   {
@@ -1874,7 +1947,7 @@ void shutdown_readout() {
       return;
     }
     if (g_readout_active.load(std::memory_order_relaxed)) {
-      std::cout << "Stopping active readout before exit...\n";
+      std::cout << "Stopping active acquisition before exit...\n";
       g_readout_stop_requested.store(true, std::memory_order_relaxed);
     }
     worker = std::move(g_readout_worker);

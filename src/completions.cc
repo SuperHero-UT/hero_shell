@@ -317,7 +317,7 @@ auto repl_completion(const char* text, int start, int end) -> char** {
       return rl_completion_matches(text, rl_filename_completion_function);
     }
 
-    if (arg_index_is(1) && command == "readout") {
+    if (arg_index_is(1) && (command == "readout" || command == "pedcalib_readout")) {
       return readout_action_completion(text);
     }
 

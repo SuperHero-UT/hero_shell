@@ -41,7 +41,7 @@ const std::vector<ShellState> kConnectedStates = {ShellState::CONNECTED, ShellSt
 const std::vector<ShellState> kDeviceStates = {ShellState::DEVICE_ADDED};
 const std::vector<std::string> kReadoutSafeCommands = {
     "help", "sleep", "get", "show", "list_devices", "list_detectors", "list_routers",
-    "readout", "exit", "quit"};
+    "readout", "pedcalib_readout", "exit", "quit"};
 
 auto command_safe_during_readout(const std::string& name) -> bool {
   return std::find(kReadoutSafeCommands.begin(), kReadoutSafeCommands.end(), name) !=
@@ -140,9 +140,13 @@ const std::vector<CommandInfo> kCommands = {
     {"pedcalib_readout", "Data Acquisition", kDeviceStates,
      "Acquire pedestal data and generate a calibrated VAREG image",
      R"(Usage: pedcalib_readout <duration> <output_file_prefix> <register_output>
+       pedcalib_readout status
+       pedcalib_readout stop
   Acquire pedestal data from exactly one detector, calculate per-channel
   median ADC-CMN pedestals, and write a copy of the last
   accepted VAREG image with calibrated Del_reg values.
+  In an interactive shell, acquisition runs in the background. Status reports
+  the raw/HK paths, frame counts, register output, and calibration messages.
   Requires calc_pedestal and a Python environment for vareg.py.
   Example: pedcalib_readout 100sec output reg_output)"},
 };
@@ -490,8 +494,8 @@ auto execute_command(const std::string& line, int depth) -> bool {
   if (g_readout_active.load(std::memory_order_relaxed)) {
     if (!command_safe_during_readout(tokens[0])) {
       std::cout << "Command '" << tokens[0]
-                << "' is unavailable during readout. Only read-only commands and "
-                   "'readout status/stop' are allowed.\n";
+                << "' is unavailable during acquisition. Only read-only commands and "
+                   "acquisition status/stop commands are allowed.\n";
       return false;
     }
   }
