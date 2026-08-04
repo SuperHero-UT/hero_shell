@@ -241,7 +241,7 @@ class Analyzer {
   EventData<ASICNUM, ChannelNum> event_data_{};
   FrameAnalyzer<ASICNUM, ChannelNum> frame_analyzer_{};
   std::ifstream file_{};
-  std::array<std::byte, kFrameSize> frame_buffer_{};
+  std::array<uint8_t, kFrameSize> frame_buffer_{};
 
  public:
   explicit Analyzer(std::string fname) {
@@ -260,14 +260,14 @@ class Analyzer {
         "Func must be callable with EventData<ASICNUM, CHANNEL_NUM>& as "
         "argument.");
     if constexpr (OldFormat) {
-      static std::array<std::byte, 4> header_buffer{};
-      static std::array<std::byte, 4> footer_buffer{};
-      static constexpr std::array<std::byte, 4> kOldHkheader = {
-          std::byte{0xAB}, std::byte{0xCD}, std::byte{0xEF}, std::byte{0x03}};
-      static constexpr std::array<std::byte, 4> kOldDataheader = {
-          std::byte{0xAB}, std::byte{0xCD}, std::byte{0xEF}, std::byte{0x02}};
-      static constexpr std::array<std::byte, 4> kOldFooter = {
-          std::byte{0xFF}, std::byte{0xFF}, std::byte{0x01}, std::byte{0x23}};
+      static std::array<uint8_t, 4> header_buffer{};
+      static std::array<uint8_t, 4> footer_buffer{};
+      static constexpr std::array<uint8_t, 4> kOldHkheader = {
+          0xAB, 0xCD, 0xEF, 0x03};
+      static constexpr std::array<uint8_t, 4> kOldDataheader = {
+          0xAB, 0xCD, 0xEF, 0x02};
+      static constexpr std::array<uint8_t, 4> kOldFooter = {
+          0xFF, 0xFF, 0x01, 0x23};
       size_t frame_count = 0;
       while (
           file_.read(reinterpret_cast<char*>(header_buffer.data()),  // NOLINT
