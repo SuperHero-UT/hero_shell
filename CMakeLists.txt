@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 project(hero_shell VERSION 0.1.0 LANGUAGES CXX)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(ExternalProject)
@@ -188,6 +191,9 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY)
 separate_arguments(ROOT_COMPILE_FLAGS NATIVE_COMMAND "${ROOT_COMPILE_FLAGS}")
 separate_arguments(ROOT_LINK_FLAGS NATIVE_COMMAND "${ROOT_LINK_FLAGS}")
+# ROOT may have been built with a different C++ dialect.  Do not let its
+# root-config flags override this project's required C++17 mode.
+list(FILTER ROOT_COMPILE_FLAGS EXCLUDE REGEX "^-std=.*")
 
 add_executable(raw2root src/raw2root.cc)
 target_compile_features(raw2root PRIVATE cxx_std_17)
