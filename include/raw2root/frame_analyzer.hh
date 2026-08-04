@@ -36,7 +36,7 @@ struct EventData {
   uint32_t livetime = 0;
   uint32_t integral_livetime = 0;
   uint32_t flag_trig_pat = 0;
-  uint32_t time_from_trigger = 0;
+  uint32_t event_counter = 0;
   uint32_t pseudo_counter = 0;
   bool is_pseudo_event = false;
   bool valid = true;
@@ -47,7 +47,7 @@ struct EventData {
     livetime = 0;
     integral_livetime = 0;
     flag_trig_pat = 0;
-    time_from_trigger = 0;
+    event_counter = 0;
     pseudo_counter = 0;
     valid = true;
     for (auto& asic : asic_data) {
@@ -146,7 +146,7 @@ class FrameAnalyzer {
     event.integral_livetime = GetValueFromRawData<12, 2>(head_);
     event.flag_trig_pat = GetValueFromRawData<14, 2>(head_);
     event.is_pseudo_event = (event.flag_trig_pat & 0x0001) == 0x0001;
-    event.time_from_trigger = GetValueFromRawData<16, 4>(head_);
+    event.event_counter = GetValueFromRawData<16, 4>(head_);
     event.pseudo_counter = GetValueFromRawData<20, 4>(head_);
     head_ += 24;
 

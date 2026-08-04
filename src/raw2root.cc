@@ -57,8 +57,7 @@ auto Analyze(const std::string& input_file) -> ProcessResult {
   events.Branch("integral_livetime", &event_data.integral_livetime,
                 "integral_livetime/i");
   events.Branch("trighitpat", &event_data.flag_trig_pat, "trighitpat/i");
-  events.Branch("time_from_exttrigger", &event_data.time_from_trigger,
-                "time_from_exttrigger/i");
+  events.Branch("event_counter", &event_data.event_counter, "event_counter/i");
   events.Branch("pseudo_counter", &event_data.pseudo_counter,
                 "pseudo_counter/i");
   events.Branch("is_pseudo_event", &event_data.is_pseudo_event,
