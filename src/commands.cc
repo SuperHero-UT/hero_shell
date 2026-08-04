@@ -8,6 +8,7 @@
 #include <superhero.grpc.pb.h>
 #include <superhero.pb.h>
 #include <sys/xattr.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -22,7 +23,6 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -322,8 +322,34 @@ auto shell_quote(const std::string& value) -> std::string {
   return quoted;
 }
 
-auto executable_directory() -> std::optional<std::filesystem::path> {
-  std::error_code error;
+auto path_parent(const std::string& path) -> std::string {
+  const auto separator = path.find_last_of('/');
+  if (separator == std::string::npos) {
+    return "";
+  }
+  if (separator == 0) {
+    return "/";
+  }
+  return path.substr(0, separator);
+}
+
+auto path_basename(const std::string& path) -> std::string {
+  const auto separator = path.find_last_of('/');
+  return separator == std::string::npos ? path : path.substr(separator + 1);
+}
+
+auto join_path(const std::string& directory, const std::string& filename) -> std::string {
+  return directory.empty() || directory == "." ? filename
+                                                 : directory + "/" + filename;
+}
+
+auto is_regular_file(const std::string& path) -> bool {
+  struct stat status {};
+  return stat(path.c_str(), &status) == 0 && S_ISREG(status.st_mode);
+}
+
+auto executable_directory() -> std::optional<std::string> {
+  std::string executable_path;
 #if defined(__APPLE__)
   uint32_t size = 0;
   (void)_NSGetExecutablePath(nullptr, &size);
@@ -331,29 +357,32 @@ auto executable_directory() -> std::optional<std::filesystem::path> {
   if (_NSGetExecutablePath(path.data(), &size) != 0) {
     return std::nullopt;
   }
-  auto executable = std::filesystem::weakly_canonical(path.data(), error);
+  executable_path = path.data();
 #elif defined(__linux__)
-  auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
+  std::vector<char> path(4096);
+  const auto length = readlink("/proc/self/exe", path.data(), path.size() - 1);
+  if (length < 0) {
+    return std::nullopt;
+  }
+  path[static_cast<size_t>(length)] = '\0';
+  executable_path = path.data();
 #else
   return std::nullopt;
 #endif
-  if (error) {
-    return std::nullopt;
-  }
-  return executable.parent_path();
+  return path_parent(executable_path);
 }
 
 auto find_auxiliary_file(const std::string& filename, bool must_be_executable)
     -> std::optional<std::string> {
-  std::vector<std::filesystem::path> candidates;
+  std::vector<std::string> candidates;
   if (const auto directory = executable_directory(); directory.has_value()) {
-    candidates.push_back(*directory / filename);
+    candidates.push_back(join_path(*directory, filename));
   }
-  candidates.emplace_back(std::filesystem::path("scripts") / filename);
+  candidates.push_back(join_path("scripts", filename));
   for (const auto& candidate : candidates) {
-    if (std::filesystem::is_regular_file(candidate) &&
+    if (is_regular_file(candidate) &&
         (!must_be_executable || access(candidate.c_str(), X_OK) == 0)) {
-      return candidate.string();
+      return candidate;
     }
   }
   if (must_be_executable &&
@@ -1431,15 +1460,14 @@ auto do_readout_foreground(const std::vector<std::string>& tokens,
   {
     std::vector<uint8_t> sorted_addresses = setup->detector_addresses;
     std::sort(sorted_addresses.begin(), sorted_addresses.end());
-    std::filesystem::path prefix_path(output_datafileprefix);
-    auto parent_dir = prefix_path.parent_path();
-    std::string log_filename = parent_dir.empty() ? "log.txt" : (parent_dir / "log.txt").string();
+    const std::string parent_dir = path_parent(output_datafileprefix);
+    const std::string log_filename =
+        parent_dir.empty() ? "log.txt" : join_path(parent_dir, "log.txt");
     std::ofstream readout_log(log_filename, std::ios::app);
     if (!readout_log.is_open()) {
       emit_readout_message("Failed to open readout log: " + log_filename, true);
       return false;
     }
-    const std::filesystem::path log_base = parent_dir;
     for (const auto& addr : sorted_addresses) {
       const auto datafilename = file_prefix + "_" + shell::to_hex_string(addr);
       bool force_flag = false;
@@ -1463,14 +1491,7 @@ auto do_readout_foreground(const std::vector<std::string>& tokens,
                              true);
         return false;
       }
-      std::filesystem::path relative_path = datafilename;
-      try {
-        const auto base = log_base.empty() ? std::filesystem::path(".") : log_base;
-        relative_path = std::filesystem::relative(datafilename, base);
-      } catch (const std::exception&) {
-        relative_path = datafilename;
-      }
-      readout_log << relative_path.string() << " " << acquired_date_value << " "
+      readout_log << path_basename(datafilename) << " " << acquired_date_value << " "
                   << exposure_seconds_value << " " << g_last_set_vareg_path << " "
                   << (force_flag ? "true" : "false") << "\n";
     }
@@ -1739,8 +1760,7 @@ auto prepare_pedcalib(const std::vector<std::string>& tokens) -> std::optional<P
     return std::nullopt;
   }
 
-  if (g_last_set_vareg_path == "N/A" ||
-      !std::filesystem::is_regular_file(g_last_set_vareg_path)) {
+  if (g_last_set_vareg_path == "N/A" || !is_regular_file(g_last_set_vareg_path)) {
     std::cerr << "pedcalib_readout requires a readable VAREG file accepted by set_vareg first.\n";
     return std::nullopt;
   }

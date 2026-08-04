@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -26,13 +25,20 @@ struct ProcessResult {
   size_t total_events = 0;
 };
 
+auto input_file_size(const std::string& input_file) -> size_t {
+  std::ifstream file(input_file, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    return 0;
+  }
+  const auto size = file.tellg();
+  return size < 0 ? 0 : static_cast<size_t>(size);
+}
+
 class DataFile {};
 
 auto Analyze(const std::string& input_file) -> ProcessResult {
-  std::error_code fs_error;
-  const auto file_size =
-      static_cast<size_t>(std::filesystem::file_size(input_file, fs_error));
-  if (fs_error) {
+  const auto file_size = input_file_size(input_file);
+  if (file_size == 0) {
     std::cerr << "Error: Could not read file size " << input_file << std::endl;
     return {};
   }

@@ -5,7 +5,6 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -173,12 +172,16 @@ class RawDataFile {
         return false;
       }
     }
-    std::error_code ec;
-    auto size = std::filesystem::file_size(filename_, ec);
-    if (ec) {
+    file_.clear();
+    file_.seekg(0, std::ios::end);
+    const auto size = file_.tellg();
+    file_.clear();
+    file_.seekg(pos);
+    if (size < 0) {
       return false;
     }
-    return static_cast<uint64_t>(pos) + length <= size;
+    return static_cast<uint64_t>(pos) + length <=
+           static_cast<uint64_t>(size);
   }
 
   auto WaitForAppend(size_t length) -> bool {
