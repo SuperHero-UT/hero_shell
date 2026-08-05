@@ -189,6 +189,18 @@ auto ensure_grpc_initialized() -> bool {
   return true;
 }
 
+auto device_type_name(superhero::DeviceType type) -> const char* {
+  switch (type) {
+    case superhero::DeviceType_DETECTOR:
+      return "detector";
+    case superhero::DeviceType_ROUTER:
+      return "router";
+    case superhero::DeviceType_UNKNOWN:
+    default:
+      return "unknown";
+  }
+}
+
 auto parse_logical_address_spec(const std::string& spec) -> std::vector<uint8_t> {
   auto trimmed = trim_copy(spec);
   if (trimmed.empty()) {
@@ -838,6 +850,28 @@ auto do_reconnect_device(const std::vector<std::string>& tokens) -> bool {
     return false;
   }
 
+  const auto device_statuses = get_device_statuses();
+  if (!device_statuses) {
+    std::cout << "Failed to reconnect device " << shell::to_hex_string(logical_address)
+              << ": could not verify device status with list_devices.\n";
+    return false;
+  }
+  const auto reconnected_device =
+      std::find_if(device_statuses->begin(), device_statuses->end(),
+                   [logical_address](const auto& device) {
+                     return device.logical_address == logical_address;
+                   });
+  if (reconnected_device == device_statuses->end()) {
+    std::cout << "Failed to reconnect device " << shell::to_hex_string(logical_address)
+              << ": device is missing from list_devices.\n";
+    return false;
+  }
+  if (!reconnected_device->enabled) {
+    std::cout << "Failed to reconnect device " << shell::to_hex_string(logical_address)
+              << ": device is still disabled.\n";
+    return false;
+  }
+
   std::cout << "Reconnected device " << shell::to_hex_string(logical_address) << ".\n";
   return true;
 }
@@ -882,18 +916,15 @@ auto do_list_devices(const std::vector<std::string>& tokens) -> bool {
   if (!ensure_grpc_initialized()) {
     return false;
   }
-  const auto detectors = get_detector_logical_addresses();
-  const auto routers = get_router_logical_addresses();
-  if (!detectors || !routers) {
+  const auto device_statuses = get_device_statuses();
+  if (!device_statuses) {
     return false;
   }
-  std::cout << "Connected detectors:\n";
-  for (const auto& addr : *detectors) {
-    std::cout << "  Logical Address: " << shell::to_hex_string(addr) << "\n";
-  }
-  std::cout << "Connected routers:\n";
-  for (const auto& addr : *routers) {
-    std::cout << "  Logical Address: " << shell::to_hex_string(addr) << "\n";
+  std::cout << "Registered devices:\n";
+  for (const auto& device : *device_statuses) {
+    std::cout << "  Logical Address: " << shell::to_hex_string(device.logical_address)
+              << ", Type: " << device_type_name(device.type)
+              << ", Status: " << (device.enabled ? "enabled" : "disabled") << "\n";
   }
   return true;
 }

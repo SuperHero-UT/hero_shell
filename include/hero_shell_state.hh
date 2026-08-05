@@ -54,6 +54,12 @@ struct PromptInfo {
   std::size_t visible_length;
 };
 
+struct DeviceStatusInfo {
+  uint8_t logical_address;
+  superhero::DeviceType type;
+  bool enabled;
+};
+
 void log_grpc_error(const std::string& api, const grpc::Status& status);
 void update_device_counts();
 void refresh_state_after_device_change();
@@ -61,3 +67,4 @@ auto build_prompt() -> PromptInfo;
 auto get_detector_logical_addresses() -> std::optional<std::vector<uint8_t>>;
 auto get_router_logical_addresses() -> std::optional<std::vector<uint8_t>>;
 auto get_device_logical_addresses() -> std::optional<std::vector<uint8_t>>;
+auto get_device_statuses() -> std::optional<std::vector<DeviceStatusInfo>>;

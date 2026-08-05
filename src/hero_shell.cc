@@ -40,7 +40,7 @@ const std::vector<ShellState> kAllStates = {ShellState::IDLE, ShellState::CONNEC
 const std::vector<ShellState> kConnectedStates = {ShellState::CONNECTED, ShellState::DEVICE_ADDED};
 const std::vector<ShellState> kDeviceStates = {ShellState::DEVICE_ADDED};
 const std::vector<std::string> kReadoutSafeCommands = {
-    "help", "sleep", "get", "show", "list_devices", "list_detectors", "list_routers",
+    "help", "sleep", "set", "get", "show", "list_devices", "list_detectors", "list_routers",
     "reconnect_device", "readout", "pedcalib_readout", "exit", "quit"};
 
 auto command_safe_during_readout(const std::string& name) -> bool {
@@ -97,11 +97,13 @@ const std::vector<CommandInfo> kCommands = {
   Ask CdTeDE to reconnect and re-enable an ignored detector or device.
   This command remains available during readout so a recovered detector can
   rejoin the ongoing acquisition.
+  Success is reported only after list_devices confirms that it is enabled.
   Example: reconnect_device 0x35)"},
     {"remove_all_devices", "Device Management", kConnectedStates, "Remove every registered device",
      "Usage: remove_all_devices\n  Remove every registered detector and router."},
     {"list_devices", "Device Management", kDeviceStates, "List all registered devices",
-     "Usage: list_devices\n  List logical addresses of all registered devices."},
+     "Usage: list_devices\n  List each registered device's logical address, type, and "
+     "enabled/disabled status."},
     {"list_detectors", "Device Management", kDeviceStates, "List registered detectors",
      "Usage: list_detectors\n  List logical addresses of registered detectors."},
     {"list_routers", "Device Management", kDeviceStates, "List registered routers",
@@ -110,6 +112,7 @@ const std::vector<CommandInfo> kCommands = {
     {"set", "Configuration", kDeviceStates, "Write a register on device(s)",
      R"(Usage: set <address> <logical|[addr,...]|[all]> <value>
   Write <value> to register <address> on the given device(s).
+  This command remains available during data acquisition.
   Example: set PeakingTime1 0x35 100)"},
     {"get", "Configuration", kDeviceStates, "Read a register from device(s)",
      R"(Usage: get <address> <logical|[addr,...]|[all]>
@@ -138,8 +141,8 @@ const std::vector<CommandInfo> kCommands = {
        readout status
        readout stop
   Start HL data streaming for <duration>, writing per-detector and HK files.
-  In an interactive shell, readout runs in the background so `get`, `show`, and
-  device-list commands remain available. Use `readout status` to inspect it or
+  In an interactive shell, readout runs in the background so `set`, `get`, `show`,
+  and device-list commands remain available. Use `readout status` to inspect it or
   `readout stop` to stop it early. Status shows output paths, frame counts,
   elapsed/remaining time, and deferred worker diagnostics.
   <duration> accepts combined units, e.g. 10s, 90min, 1h30min.
@@ -354,6 +357,35 @@ auto get_device_logical_addresses() -> std::optional<std::vector<uint8_t>> {
   return to_uint8_addresses("GetDeviceList", reply.logical_address());
 }
 
+auto get_device_statuses() -> std::optional<std::vector<DeviceStatusInfo>> {
+  if (!g_stub) {
+    return std::nullopt;
+  }
+  grpc::ClientContext context;
+  superhero::GetDeviceListRequest request;
+  superhero::GetDeviceListReply reply;
+  auto status = g_stub->GetDeviceList(&context, request, &reply);
+  log_grpc_error("GetDeviceList", status);
+  if (!status.ok()) {
+    return std::nullopt;
+  }
+
+  std::vector<DeviceStatusInfo> statuses;
+  statuses.reserve(static_cast<size_t>(reply.device_status_size()));
+  for (const auto& device : reply.device_status()) {
+    if (device.logical_address() > 0xFFu) {
+      std::ostringstream message;
+      message << "[GetDeviceList] Ignoring out-of-range logical address "
+              << device.logical_address() << " (must fit in one byte)";
+      emit_readout_message(message.str(), true);
+      continue;
+    }
+    statuses.push_back({static_cast<uint8_t>(device.logical_address()), device.type(),
+                        device.enabled()});
+  }
+  return statuses;
+}
+
 void update_device_counts() {
   if (!g_stub) {
     g_router_count = 0;
@@ -504,7 +536,7 @@ auto execute_command(const std::string& line, int depth) -> bool {
   if (g_readout_active.load(std::memory_order_relaxed)) {
     if (!command_safe_during_readout(tokens[0])) {
       std::cout << "Command '" << tokens[0]
-                << "' is unavailable during acquisition. Only read-only commands and "
+                << "' is unavailable during acquisition. Only set, read-only, and "
                    "acquisition status/stop commands are allowed.\n";
       return false;
     }

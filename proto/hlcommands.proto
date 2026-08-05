@@ -65,8 +65,22 @@ message GetRouterListReply {
 
 message GetDeviceListRequest { };
 
+enum DeviceType {
+  DeviceType_UNKNOWN = 0;
+  DeviceType_DETECTOR = 1;
+  DeviceType_ROUTER = 2;
+}
+
+message DeviceStatus {
+  uint32 logical_address = 1;
+  DeviceType type = 2;
+  bool enabled = 3;
+}
+
 message GetDeviceListReply {
+  // Kept for compatibility with clients that only consume logical addresses.
   repeated uint32 logical_address = 1;
+  repeated DeviceStatus device_status = 2;
 }
 
 message ReconnectDeviceRequest {
