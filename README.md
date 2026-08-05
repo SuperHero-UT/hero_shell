@@ -50,8 +50,8 @@ hero_shell[localhost:50051(0,1)][00:09.82/00:10.00]> show 0x35
 The prompt shows the connected endpoint and the registered `(router, detector)` counts.
 During readout it preserves that format and appends a live `[remaining/total]` countdown formatted
 in centiseconds. The countdown disappears when acquisition finishes or is stopped.
-While a readout is active, `get`, `show`, `list_devices`, `list_detectors`, and `list_routers`
-remain available. `readout status` shows total and per-detector frame counts, output paths,
+While a readout is active, `get`, `show`, `list_devices`, `list_detectors`, `list_routers`, and
+`reconnect_device` remain available. `readout status` shows total and per-detector frame counts, output paths,
 elapsed/remaining time, and any deferred worker diagnostics; use `readout stop` to request an
 early stop. Commands that change configuration or topology are temporarily rejected to protect the
 acquisition. Exiting the shell requests a stop and waits for the readout to finish. Completion is
@@ -96,6 +96,7 @@ For detailed command syntax and behavior, please refer to the [Command Reference
 | | [`add_router`](docs/COMMANDS.md#add_router) | Register a router |
 | | [`remove_router`](docs/COMMANDS.md#remove_router) | Remove a registered router |
 | | [`remove_device`](docs/COMMANDS.md#remove_device) | Remove a generic device |
+| | [`reconnect_device`](docs/COMMANDS.md#reconnect_device) | Reconnect an ignored device |
 | | [`remove_all_devices`](docs/COMMANDS.md#remove_all_devices) | Remove all registered devices |
 | | [`list_devices`](docs/COMMANDS.md#list_devices) | List all registered devices |
 | | [`list_detectors`](docs/COMMANDS.md#list_detectors) | List registered detectors |

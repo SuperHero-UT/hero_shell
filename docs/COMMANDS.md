@@ -48,7 +48,7 @@ required gRPC connection or devices are absent.
 | All states | `help`, `sleep`, `exit`, `quit` |
 | `IDLE` | `connect` |
 | `CONNECTED`, `DEVICE_ADDED` | `add_detector`, `remove_detector`, `add_router`, `remove_router`, `remove_device`, `remove_all_devices`, `set_linkspeed` |
-| `DEVICE_ADDED` | `list_devices`, `list_detectors`, `list_routers`, `set`, `get`, `configure_fpga`, `set_vareg`, `show`, `readout`, `pedcalib_readout` |
+| `DEVICE_ADDED` | `list_devices`, `list_detectors`, `list_routers`, `reconnect_device`, `set`, `get`, `configure_fpga`, `set_vareg`, `show`, `readout`, `pedcalib_readout` |
 
 ## General Commands
 
@@ -200,6 +200,23 @@ remove_all_devices
 ```
 
 Removes every registered device, stopping if any removal fails.
+
+### `reconnect_device`
+
+```text
+reconnect_device <logical_address>
+```
+
+Asks CdTeDE to probe an ignored detector or router and re-enable it when the
+probe succeeds. This command remains available during readout. The RPC is
+bounded by a three-second client deadline so a lost server connection cannot
+block the interactive shell indefinitely.
+
+Example:
+
+```text
+reconnect_device 0x35
+```
 
 ### `list_devices`
 

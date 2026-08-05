@@ -291,7 +291,8 @@ auto repl_completion(const char* text, int start, int end) -> char** {
     const auto& command = current_command[0];
 
     if (arg_index_is(1) &&
-        (command == "remove_device" || command == "set_vareg" || command == "show")) {
+        (command == "remove_device" || command == "reconnect_device" ||
+         command == "set_vareg" || command == "show")) {
       return device_address_completion(text);
     }
 

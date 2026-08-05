@@ -803,6 +803,45 @@ auto do_remove_device(const std::vector<std::string>& tokens) -> bool {
   return true;
 }
 
+auto do_reconnect_device(const std::vector<std::string>& tokens) -> bool {
+  if (tokens.size() != 2) {
+    do_help({"help", "reconnect_device"});
+    return false;
+  }
+
+  uint8_t logical_address = 0;
+  try {
+    logical_address = shell::parse_uint8(tokens[1]);
+  } catch (const std::exception& e) {
+    std::cout << "Error parsing logical address: " << e.what() << "\n";
+    return false;
+  }
+
+  if (!ensure_grpc_initialized()) {
+    return false;
+  }
+
+  grpc::ClientContext context;
+  context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(3));
+  superhero::ReconnectDeviceRequest request;
+  superhero::ReconnectDeviceReply reply;
+  request.set_logical_address(logical_address);
+
+  const auto status = g_stub->ReconnectDevice(&context, request, &reply);
+  log_grpc_error("ReconnectDevice", status);
+  if (!status.ok()) {
+    return false;
+  }
+  if (!reply.accepted()) {
+    std::cout << "Failed to reconnect device " << shell::to_hex_string(logical_address) << ": "
+              << reply.message() << "\n";
+    return false;
+  }
+
+  std::cout << "Reconnected device " << shell::to_hex_string(logical_address) << ".\n";
+  return true;
+}
+
 auto do_remove_all_devices(const std::vector<std::string>& tokens) -> bool {
   if (tokens.size() != 1) {
     do_help({"help", "remove_all_devices"});

@@ -41,7 +41,7 @@ const std::vector<ShellState> kConnectedStates = {ShellState::CONNECTED, ShellSt
 const std::vector<ShellState> kDeviceStates = {ShellState::DEVICE_ADDED};
 const std::vector<std::string> kReadoutSafeCommands = {
     "help", "sleep", "get", "show", "list_devices", "list_detectors", "list_routers",
-    "readout", "pedcalib_readout", "exit", "quit"};
+    "reconnect_device", "readout", "pedcalib_readout", "exit", "quit"};
 
 auto command_safe_during_readout(const std::string& name) -> bool {
   return std::find(kReadoutSafeCommands.begin(), kReadoutSafeCommands.end(), name) !=
@@ -91,6 +91,13 @@ const std::vector<CommandInfo> kCommands = {
      "Usage: remove_router <logical_address>\n  Remove a registered router."},
     {"remove_device", "Device Management", kConnectedStates, "Remove a registered device",
      "Usage: remove_device <logical_address>\n  Remove a registered device (detector or router)."},
+    {"reconnect_device", "Device Management", kDeviceStates,
+     "Reconnect an ignored detector or device",
+     R"(Usage: reconnect_device <logical_address>
+  Ask CdTeDE to reconnect and re-enable an ignored detector or device.
+  This command remains available during readout so a recovered detector can
+  rejoin the ongoing acquisition.
+  Example: reconnect_device 0x35)"},
     {"remove_all_devices", "Device Management", kConnectedStates, "Remove every registered device",
      "Usage: remove_all_devices\n  Remove every registered detector and router."},
     {"list_devices", "Device Management", kDeviceStates, "List all registered devices",
@@ -527,6 +534,9 @@ auto execute_command(const std::string& line, int depth) -> bool {
   }
   if (tokens[0] == "remove_device") {
     return do_remove_device(tokens);
+  }
+  if (tokens[0] == "reconnect_device") {
+    return do_reconnect_device(tokens);
   }
 
   if (tokens[0] == "remove_all_devices") {

@@ -69,6 +69,15 @@ message GetDeviceListReply {
   repeated uint32 logical_address = 1;
 }
 
+message ReconnectDeviceRequest {
+  uint32 logical_address = 1;
+}
+
+message ReconnectDeviceReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
 message SetVaRegisterRequest {
   uint32 logical_address = 1;
   bytes data = 2;

@@ -12,6 +12,7 @@ auto do_remove_detector(const std::vector<std::string>& tokens) -> bool;
 auto do_add_router(const std::vector<std::string>& tokens) -> bool;
 auto do_remove_router(const std::vector<std::string>& tokens) -> bool;
 auto do_remove_device(const std::vector<std::string>& tokens) -> bool;
+auto do_reconnect_device(const std::vector<std::string>& tokens) -> bool;
 auto do_remove_all_devices(const std::vector<std::string>& tokens) -> bool;
 auto do_list_devices(const std::vector<std::string>& tokens) -> bool;
 auto do_list_detectors(const std::vector<std::string>& tokens) -> bool;
