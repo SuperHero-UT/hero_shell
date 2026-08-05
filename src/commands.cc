@@ -868,11 +868,12 @@ auto do_reconnect_device(const std::vector<std::string>& tokens) -> bool {
   }
   if (!reconnected_device->enabled) {
     std::cout << "Failed to reconnect device " << shell::to_hex_string(logical_address)
-              << ": device is still disabled.\n";
+              << ": Status: disabled.\n";
     return false;
   }
 
-  std::cout << "Reconnected device " << shell::to_hex_string(logical_address) << ".\n";
+  std::cout << "Reconnected device " << shell::to_hex_string(logical_address)
+            << ". Status: enabled.\n";
   return true;
 }
 
@@ -937,13 +938,16 @@ auto do_list_detectors(const std::vector<std::string>& tokens) -> bool {
   if (!ensure_grpc_initialized()) {
     return false;
   }
-  const auto detectors = get_detector_logical_addresses();
-  if (!detectors) {
+  const auto device_statuses = get_device_statuses();
+  if (!device_statuses) {
     return false;
   }
-  std::cout << "Connected detectors:\n";
-  for (const auto& addr : *detectors) {
-    std::cout << "  Logical Address: " << shell::to_hex_string(addr) << "\n";
+  std::cout << "Registered detectors:\n";
+  for (const auto& device : *device_statuses) {
+    if (device.type == superhero::DeviceType_DETECTOR) {
+      std::cout << "  Logical Address: " << shell::to_hex_string(device.logical_address)
+                << ", Status: " << (device.enabled ? "enabled" : "disabled") << "\n";
+    }
   }
   return true;
 }
@@ -956,13 +960,16 @@ auto do_list_routers(const std::vector<std::string>& tokens) -> bool {
   if (!ensure_grpc_initialized()) {
     return false;
   }
-  const auto routers = get_router_logical_addresses();
-  if (!routers) {
+  const auto device_statuses = get_device_statuses();
+  if (!device_statuses) {
     return false;
   }
-  std::cout << "Connected routers:\n";
-  for (const auto& addr : *routers) {
-    std::cout << "  Logical Address: " << shell::to_hex_string(addr) << "\n";
+  std::cout << "Registered routers:\n";
+  for (const auto& device : *device_statuses) {
+    if (device.type == superhero::DeviceType_ROUTER) {
+      std::cout << "  Logical Address: " << shell::to_hex_string(device.logical_address)
+                << ", Status: " << (device.enabled ? "enabled" : "disabled") << "\n";
+    }
   }
   return true;
 }

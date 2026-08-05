@@ -105,9 +105,11 @@ const std::vector<CommandInfo> kCommands = {
      "Usage: list_devices\n  List each registered device's logical address, type, and "
      "enabled/disabled status."},
     {"list_detectors", "Device Management", kDeviceStates, "List registered detectors",
-     "Usage: list_detectors\n  List logical addresses of registered detectors."},
+     "Usage: list_detectors\n  List logical addresses and enabled/disabled status of "
+     "registered detectors."},
     {"list_routers", "Device Management", kDeviceStates, "List registered routers",
-     "Usage: list_routers\n  List logical addresses of registered routers."},
+     "Usage: list_routers\n  List logical addresses and enabled/disabled status of registered "
+     "routers."},
 
     {"set", "Configuration", kDeviceStates, "Write a register on device(s)",
      R"(Usage: set <address> <logical|[addr,...]|[all]> <value>
